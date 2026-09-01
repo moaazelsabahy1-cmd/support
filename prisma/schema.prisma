@@ -1,0 +1,615 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DEACTIVATED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING_CUSTOMER
+  WAITING_AGENT
+  RESOLVED
+  CLOSED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum MeetingStatus {
+  REQUESTED
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+}
+
+enum IndexStatus {
+  PENDING
+  PENDING_REVIEW
+  PROCESSING
+  READY
+  FAILED
+  DISABLED
+  REJECTED
+}
+
+enum KnowledgeSourceType {
+  QA
+  FILE
+  WEB
+  CONVERSATION
+}
+
+enum IndexJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
+enum MessageRole {
+  CUSTOMER
+  AI
+  HUMAN
+  SYSTEM
+}
+
+enum AiHandoffReason {
+  KNOWLEDGE_NOT_FOUND
+  LOW_RELEVANCE
+  LOW_CONFIDENCE
+  CUSTOMER_REQUESTED_HUMAN
+  BUSINESS_RULE
+  SENSITIVE_OPERATION
+  AI_ERROR
+}
+
+enum EmbeddingStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+model Organization {
+  id            String             @id
+  name          String
+  createdAt     DateTime           @default(now()) @map("created_at")
+  sources       KnowledgeSource[]
+  users         User[]
+  conversations Conversation[]
+  widgetSites   WidgetSite[]
+
+  @@map("organizations")
+}
+
+model WidgetSite {
+  id             String   @id
+  publicKey      String   @unique @map("public_key")
+  organizationId String   @map("organization_id")
+  enabled        Boolean  @default(true)
+  title          String   @default("Assistant")
+  welcomeMessage String   @map("welcome_message")
+  assistantName  String   @default("Assistant") @map("assistant_name")
+  logoUrl        String?  @map("logo_url")
+  primaryColor   String   @default("#0f766e") @map("primary_color")
+  language       String   @default("en")
+  allowedOrigins String[] @map("allowed_origins")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId])
+  @@map("widget_sites")
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  role          Role      @default(CUSTOMER)
+  departmentId  String?
+  status        UserStatus @default(ACTIVE)
+  avatarUrl     String?
+  phone         String?
+  lastSeenAt    DateTime?
+  organizationId String    @default("default")
+
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  department     Department?      @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  sessions       Session[]
+  accounts       Account[]
+  tickets        Ticket[]         @relation("TicketCustomer")
+  assignedTickets Ticket[]        @relation("TicketAgent")
+  comments       Comment[]
+  history        TicketHistory[]
+  attachments    Attachment[]
+  customerConvos Conversation[]   @relation("ConvoCustomer")
+  agentConvos    Conversation[]   @relation("ConvoAgent")
+  messages       Message[]
+  customerMeetings Meeting[]      @relation("MeetingCustomer")
+  agentMeetings  Meeting[]        @relation("MeetingAgent")
+  kbArticles     KbArticle[]
+  knowledgeSources KnowledgeSource[]
+  chatLogs       AiChatLog[]
+  notifications  Notification[]
+  pushSubs       PushSubscription[]
+
+  @@unique([email])
+  @@index([organizationId])
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  issuer                String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Department {
+  id                       String   @id
+  name                     String
+  slug                     String   @unique
+  description              String?
+  isDefault                Boolean  @default(false)
+  slaFirstResponseMinutes  Int
+  slaResolveMinutes        Int
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  users                    User[]
+  tickets                  Ticket[]
+
+  @@map("departments")
+}
+
+model Ticket {
+  id              String         @id
+  number          String         @unique
+  title           String
+  description     String
+  customerId      String
+  assignedAgentId String?
+  departmentId    String?
+  status          TicketStatus   @default(OPEN)
+  priority        TicketPriority @default(MEDIUM)
+  category        String?
+  tags            String[]
+  csat            Int?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  resolvedAt      DateTime?
+  closedAt        DateTime?
+  firstResponseAt DateTime?
+
+  customer   User          @relation("TicketCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  agent      User?         @relation("TicketAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  department Department?   @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  history    TicketHistory[]
+  comments   Comment[]
+  attachments Attachment[]
+  conversations Conversation[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([customerId])
+  @@index([assignedAgentId])
+  @@index([departmentId])
+  @@index([createdAt])
+  @@map("tickets")
+}
+
+model TicketHistory {
+  id        String   @id
+  ticketId  String
+  actorId   String
+  action    String
+  from      String?
+  to        String?
+  meta      Json?
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor  User   @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_history")
+}
+
+model Comment {
+  id        String   @id
+  ticketId  String
+  authorId  String
+  body      String
+  internal  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  author User   @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@index([ticketId, createdAt])
+  @@map("comments")
+}
+
+model Attachment {
+  id         String   @id
+  ownerId    String
+  ticketId   String?
+  messageId  String?
+  filename   String
+  mimeType   String
+  size       Int
+  key        String
+  createdAt  DateTime @default(now())
+
+  owner   User     @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  ticket  Ticket?  @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([ticketId])
+  @@map("attachments")
+}
+
+model Conversation {
+  id              String             @id
+  customerId      String
+  agentId         String?
+  ticketId        String?
+  organizationId  String             @default("default")
+  status          ConversationStatus @default(OPEN)
+  lastMessageAt   DateTime?
+  handoffReason   AiHandoffReason?
+  aiPaused        Boolean            @default(false)
+  sourceSessionId String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  customer     User          @relation("ConvoCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  agent        User?         @relation("ConvoAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  ticket       Ticket?       @relation(fields: [ticketId], references: [id], onDelete: SetNull)
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  messages     Message[]
+
+  @@index([customerId])
+  @@index([agentId])
+  @@index([aiPaused, status])
+  @@index([sourceSessionId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String            @id
+  conversationId String
+  senderId       String
+  body           String
+  attachmentIds  String[]
+  readBy         String[]
+  internal       Boolean           @default(false)
+  role           MessageRole       @default(CUSTOMER)
+  handoffReason  AiHandoffReason?
+  aiTurnKey      String?
+  createdAt      DateTime          @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Restrict)
+  attachments  Attachment[]
+
+  @@unique([conversationId, aiTurnKey])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+model Meeting {
+  id          String        @id
+  customerId  String
+  agentId     String?
+  title       String
+  description String?
+  date        DateTime
+  startTime   String
+  endTime     String
+  status      MeetingStatus @default(REQUESTED)
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  customer User  @relation("MeetingCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  agent    User? @relation("MeetingAgent", fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, date])
+  @@map("meetings")
+}
+
+model KbCategory {
+  id          String      @id
+  name        String
+  slug        String      @unique
+  description String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  articles    KbArticle[]
+
+  @@map("kb_categories")
+}
+
+model KbArticle {
+  id         String     @id
+  title      String
+  slug       String     @unique
+  excerpt    String
+  body       String
+  categoryId String
+  tags       String[]
+  featured   Boolean    @default(false)
+  published  Boolean    @default(false)
+  authorId   String
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  category KbCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  author   User       @relation(fields: [authorId], references: [id], onDelete: Restrict)
+
+  @@map("kb_articles")
+}
+
+model KnowledgeSource {
+  id               String               @id
+  organizationId   String
+  type             KnowledgeSourceType
+  title            String
+  description      String?
+  status           IndexStatus          @default(PENDING)
+  sourceUrl        String?
+  fileId           String?
+  storageKey       String?
+  filename         String?
+  mimeType         String?
+  size             Int?
+  category         String?
+  categoryId       String?
+  tags             String[]
+  question         String?
+  answer           String?
+  createdBy        String?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  indexedAt        DateTime?
+  errorCode        String?
+  errorMessage     String?
+  chunkCount       Int                  @default(0)
+  embeddingModel   String?
+  embeddingDims    Int?
+  metadata         Json?
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  creator      User?             @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  chunks       KnowledgeChunk[]
+  jobs         KnowledgeIndexJob[]
+
+  @@index([organizationId, status])
+  @@index([type, organizationId])
+  @@index([updatedAt])
+  @@map("knowledge_sources")
+}
+
+model KnowledgeChunk {
+  id               String           @id
+  organizationId   String
+  sourceType       KnowledgeSourceType
+  sourceId         String
+  chunkId          String
+  text             String
+  order            Int
+  metadata         Json?
+  embedding        Float[]
+  embeddingStatus  EmbeddingStatus  @default(PENDING)
+  embeddingModel   String?
+  embeddingDims    Int?
+  qdrantId         String?
+  createdAt        DateTime         @default(now())
+
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceId, chunkId])
+  @@index([sourceId, sourceType])
+  @@index([organizationId, embeddingStatus])
+  @@map("knowledge_chunks")
+}
+
+model KnowledgeIndexJob {
+  id             String         @id
+  jobId          String         @unique
+  sourceId       String
+  organizationId String
+  status         IndexJobStatus @default(PENDING)
+  startedAt      DateTime?
+  completedAt    DateTime?
+  error          String?
+  createdAt      DateTime       @default(now())
+
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, createdAt])
+  @@map("knowledge_index_jobs")
+}
+
+model AiChatLog {
+  id              String   @id
+  userId          String?
+  sessionId       String
+  question        String?
+  answer          String?
+  message         String
+  response        String
+  sources         Json
+  retrievalScores Float[]
+  tokens          Int?
+  model           String?
+  embeddingModel  String?
+  escalated       Boolean  @default(false)
+  fallbackUsed    Boolean?
+  confidence      Float?
+  handoffReason   AiHandoffReason?
+  createdAt       DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId, createdAt])
+  @@index([userId])
+  @@map("ai_chat_logs")
+}
+
+model Notification {
+  id        String   @id
+  userId    String
+  title     String
+  body      String
+  href      String?
+  type      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id        String   @id
+  userId    String
+  endpoint  String   @unique
+  keys      Json
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model ContactSubmission {
+  id           String   @id
+  name         String
+  email        String
+  message      String
+  sessionId    String?
+  ticketNumber String?
+  aiContext    String?
+  createdAt    DateTime @default(now())
+
+  @@map("contact_submissions")
+}
+
+model NewsletterSubscriber {
+  id        String   @id
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("newsletter_subscribers")
+}
+
+model RoleRecord {
+  id          String   @id
+  name        Role     @unique
+  permissions String[]
+
+  @@map("roles")
+}
+
+model PermissionRecord {
+  id          String @id
+  key         String @unique
+  description String
+
+  @@map("permissions")
+}
+
+model TicketCounter {
+  year Int @id
+  seq  Int
+
+  @@map("ticket_counters")
+}
+
+model Settings {
+  id           String   @id
+  appName      String
+  branding     Json
+  widget       Json
+  integrations Json
+  updatedAt    DateTime @updatedAt
+
+  @@map("settings")
+}

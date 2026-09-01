@@ -1,26 +1,388 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --border: #e2e8f0;
+  --primary: #0d9488;
+  --primary-foreground: #f0fdfa;
+  --accent: #ccfbf1;
+  --destructive: #dc2626;
+  --ring: #14b8a6;
+  --radius: 0.85rem;
+  --sidebar: #0f172a;
+  --sidebar-foreground: #e2e8f0;
+}
+
+.dark {
+  --background: #020617;
+  --foreground: #e2e8f0;
+  --card: #0f172a;
+  --card-foreground: #e2e8f0;
+  --muted: #111827;
+  --muted-foreground: #94a3b8;
+  --border: #1e293b;
+  --primary: #2dd4bf;
+  --primary-foreground: #042f2e;
+  --accent: #134e4a;
+  --destructive: #f87171;
+  --ring: #2dd4bf;
+  --sidebar: #020617;
+  --sidebar-foreground: #e2e8f0;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-destructive: var(--destructive);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --radius-lg: var(--radius);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--border);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+/* Public landing / auth — follows html.dark vs light; does not change in-app teal tokens */
+.landing {
+  --primary: #3b82f6;
+  --primary-foreground: #f5f5f5;
+  --ring: #3b82f6;
+}
+
+html.dark .landing {
+  --background: #080808;
+  --foreground: #f5f5f5;
+  --card: #171717;
+  --card-foreground: #f5f5f5;
+  --muted: #171717;
+  --muted-foreground: #a1a1aa;
+  --border: #292929;
+  --accent: #172033;
+  --input: #202020;
+}
+
+html:not(.dark) .landing {
+  --background: #f7f7f8;
+  --foreground: #171717;
+  --card: #ffffff;
+  --card-foreground: #171717;
+  --muted: #f4f4f5;
+  --muted-foreground: #52525b;
+  --border: #e4e4e7;
+  --accent: #eff6ff;
+  --input: #ffffff;
+}
+
+.landing,
+.landing header,
+.landing footer,
+.landing section,
+.landing .bg-card,
+.landing input,
+.landing textarea,
+.landing select,
+.landing button {
+  transition:
+    background-color 180ms ease,
+    color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.landing input,
+.landing textarea,
+.landing select {
+  background-color: var(--input);
+}
+
+.landing .landing-connector {
+  background: var(--border);
+}
+
+html.dark:has(.landing),
+html.dark:has(.landing) body {
+  background: #080808;
+  color: #f5f5f5;
+  color-scheme: dark;
+  overflow-x: clip;
+}
+
+html:not(.dark):has(.landing),
+html:not(.dark):has(.landing) body {
+  background: #f7f7f8;
+  color: #171717;
+  color-scheme: light;
+  overflow-x: clip;
+}
+
+html:has(.landing) {
+  scroll-behavior: smooth;
+}
+
+.landing section[id] {
+  scroll-margin-top: 7.5rem;
+}
+
+@media (min-width: 1024px) {
+  .landing section[id] {
+    scroll-margin-top: 5.5rem;
+  }
+}
+
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landing-accordion-down {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes landing-grid-shift {
+  from {
+    opacity: 0.18;
+  }
+  to {
+    opacity: 0.32;
+  }
+}
+
+.landing-hero-item {
+  animation: landing-fade-up 500ms ease both;
+}
+
+.landing-hero-item-1 {
+  animation-delay: 40ms;
+}
+.landing-hero-item-2 {
+  animation-delay: 120ms;
+}
+.landing-hero-item-3 {
+  animation-delay: 200ms;
+}
+.landing-hero-item-4 {
+  animation-delay: 280ms;
+}
+
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+  transition:
+    opacity 420ms ease,
+    transform 420ms ease;
+}
+
+[data-reveal].is-visible {
+  opacity: 1;
+  transform: none;
+}
+
+[data-reveal="delay-1"].is-visible {
+  transition-delay: 60ms;
+}
+[data-reveal="delay-2"].is-visible {
+  transition-delay: 120ms;
+}
+[data-reveal="delay-3"].is-visible {
+  transition-delay: 180ms;
+}
+
+.landing-cta-grid {
+  animation: landing-grid-shift 10s ease-in-out infinite alternate;
+}
+
+.landing-widget-panel {
+  animation: landing-fade-up 220ms ease both;
+}
+
+.landing-msg-in {
+  animation: landing-fade-up 220ms ease both;
+}
+
+.landing-dots span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+  animation: landing-dot 900ms ease-in-out infinite;
+}
+.landing-dots span:nth-child(2) {
+  animation-delay: 150ms;
+}
+.landing-dots span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes landing-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.trusted-marquee {
+  --marquee-gap: 3.5rem;
+  --marquee-duration: 32s;
+  overflow: hidden;
+  width: 100%;
+  mask-image: linear-gradient(to right, transparent, #000 8%, #000 92%, transparent);
+}
+
+.trusted-marquee__track {
+  display: flex;
+  width: max-content;
+  animation: trusted-marquee-scroll var(--marquee-duration) linear infinite;
+}
+
+.trusted-marquee:hover .trusted-marquee__track {
+  animation-play-state: paused;
+}
+
+.trusted-marquee__group {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: var(--marquee-gap);
+  padding-right: var(--marquee-gap);
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+@keyframes trusted-marquee-scroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 767px) {
+  .trusted-marquee {
+    --marquee-gap: 2rem;
+    --marquee-duration: 48s;
+  }
+}
+
+@media (hover: hover) {
+  .landing .landing-lift {
+    transition:
+      transform 180ms ease,
+      border-color 180ms ease,
+      box-shadow 180ms ease;
+  }
+  .landing .landing-lift:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.12);
+  }
+  .landing .landing-btn-motion:hover {
+    transform: translateY(-1px);
+  }
+  .landing .landing-btn-motion:active {
+    transform: translateY(1px);
+  }
+  .landing .landing-arrow:hover svg {
+    transform: translate(2px, -2px);
+  }
+  .landing .landing-arrow svg {
+    transition: transform 180ms ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html:has(.landing) {
+    scroll-behavior: auto;
+  }
+  .landing,
+  .landing header,
+  .landing footer,
+  .landing section,
+  .landing .bg-card,
+  .landing input,
+  .landing textarea,
+  .landing select,
+  .landing button {
+    transition: none;
+  }
+  .landing-hero-item,
+  .landing-widget-panel,
+  .landing-msg-in,
+  .landing-cta-grid,
+  .landing-dots span {
+    animation: none;
+  }
+  [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .landing .landing-lift:hover,
+  .landing .landing-btn-motion:hover,
+  .landing .landing-btn-motion:active {
+    transform: none;
+    box-shadow: none;
+  }
+  .trusted-marquee__track {
+    animation: none;
+  }
+  .trusted-marquee__group[aria-hidden="true"] {
+    display: none;
+  }
+  .trusted-marquee__track {
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+    transform: none;
+  }
+  .trusted-marquee__group {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 1.5rem 2.5rem;
+  }
 }

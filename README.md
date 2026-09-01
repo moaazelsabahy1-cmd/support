@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Solvio
 
-## Getting Started
+Production-ready customer support SaaS: tickets, live chat, knowledge base, AI assistant, meetings, notifications, analytics, PWA, and an embeddable widget.
 
-First, run the development server:
+This app uses a **custom Node server** (`server.ts`) so Socket.IO and Next.js share one process. It is not deployable to Vercel serverless. Use Docker, a VM, or any long-running Node host.
+
+## Prerequisites
+
+- Node.js 20+
+- PostgreSQL 16 (local, Docker, or hosted). Default local Compose URL: `postgresql://solvio:solvio@localhost:5433/solvio` (host port 5433 to avoid clashing with an existing Postgres on 5432).
+
+Optional: OpenRouter (LLM + embeddings), Cloudflare R2, Qdrant, Firecrawl, SMTP, VAPID push keys.
+
+## Commands
 
 ```bash
+npm install
+cp .env.example .env
+docker compose up -d db
+npx prisma migrate deploy
+npm run db:check
+npm run db:seed
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+If you already have Postgres, set `DATABASE_URL` in `.env` and skip Compose.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Copy an existing MongoDB workspace (preserves 24-character document IDs for Qdrant):
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npx tsx scripts/migrate-mongo-to-postgres.ts
+```
 
-## Learn More
+Production:
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run build
+npm run start
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Quality:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npm run lint
+npm run typecheck
+npm test
+```
 
-## Deploy on Vercel
+## Demo accounts (development only)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Role | Email | Password |
+| --- | --- | --- |
+| Super admin | superadmin@solvio.local | SolvioSuper1! |
+| Admin | admin@solvio.local | SolvioAdmin1! |
+| Agent | agent@solvio.local | SolvioAgent1! |
+| Customer | customer@solvio.local | SolvioCustomer1! |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Embed widget
+
+```html
+<script src="http://localhost:3000/widget.js"></script>
+```
+
+Public widget APIs use `WIDGET_PUBLIC_KEY` (not your OpenRouter key).
+LLM requests go through OpenRouter (`OPENROUTER_API_KEY`). Chat model: `OPENROUTER_MODEL` (default `google/gemini-3.7-flash`). Embeddings: `OPENROUTER_EMBEDDING_MODEL` (default `openai/text-embedding-3-small`, 1536 dimensions). Requests use `https://openrouter.ai/api/v1`, not OpenAI’s API. Do not put provider keys in client-side code.
