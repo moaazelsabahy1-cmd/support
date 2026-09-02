@@ -15,6 +15,8 @@ type Conv = {
   lastMessageAt?: string;
   aiPaused?: boolean;
   handoffReason?: string | null;
+  lastQuestion?: string | null;
+  customer?: { id?: string; name?: string; email?: string } | null;
 };
 type Msg = { _id: string; body: string; senderId: string; createdAt: string; role?: string; conversationId?: string };
 
@@ -135,17 +137,30 @@ export function ChatApp({ userId, initialConversationId }: { userId: string; ini
                 className={`w-full rounded-lg px-3 py-2 text-left text-sm ${active === c._id ? "bg-muted" : ""}`}
                 onClick={() => setActive(c._id)}
               >
-                Chat {c._id.slice(-6)} {c.aiPaused ? "· waiting" : ""} {online[c.customerId] ? "•" : ""}
+                Chat {c.customer?.name || c._id.slice(-6)} {c.aiPaused ? "· waiting" : ""} {online[c.customerId] ? "•" : ""}
               </button>
             </li>
           ))}
         </ul>
       </Card>
       <Card className="flex min-h-[60vh] flex-col">
-        {activeConv?.aiPaused ? (
-          <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-            Waiting for a human agent{activeConv.handoffReason ? ` · ${activeConv.handoffReason}` : ""}.
-          </p>
+        {activeConv ? (
+          <div className="mb-3 space-y-2">
+            <p className="text-sm">
+              <span className="font-medium">{activeConv.customer?.name || "Customer"}</span>
+              {activeConv.customer?.email ? (
+                <span className="text-muted-foreground"> · {activeConv.customer.email}</span>
+              ) : null}
+            </p>
+            {activeConv.aiPaused ? (
+              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+                Waiting for a human agent{activeConv.handoffReason ? ` · ${activeConv.handoffReason}` : ""}.
+                {activeConv.lastQuestion ? (
+                  <span className="mt-1 block text-xs text-muted-foreground">{activeConv.lastQuestion}</span>
+                ) : null}
+              </p>
+            ) : null}
+          </div>
         ) : null}
         <div className="flex-1 space-y-2 overflow-y-auto">
           {messages.map((m) => (

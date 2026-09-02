@@ -11,6 +11,9 @@ import { hasPermission } from "../lib/permissions";
 import { trainingPairSchema, webSourceSchema } from "../lib/validation";
 import { AppError } from "../lib/api-response";
 import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
+import { knowledgeIsSufficient } from "../lib/ai/agent";
+import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
+import { DEFAULT_ANSWER_CONFIDENCE_THRESHOLD } from "../lib/env";
 
 const hit = (over: Partial<RetrievedHit>): RetrievedHit => ({
   sourceId: "a",
@@ -121,6 +124,7 @@ describe("grounded prompt and sources", () => {
 
   it("maps public source labels without ids", () => {
     expect(publicSourceLabel({ title: "Pair", sourceType: "QA" })).toEqual({ title: "Training knowledge", type: "QA" });
+    expect(publicSourceLabel({ title: "From chat", sourceType: "CONVERSATION" })).toEqual({ title: "Training knowledge", type: "QA" });
     expect(publicSourceLabel({ title: "Guide.pdf", sourceType: "FILE" }).title).toBe("Guide.pdf");
     expect(publicSourceLabel({ title: "Help", sourceType: "WEB", url: "https://x.test" }).url).toBe("https://x.test");
   });
@@ -173,8 +177,36 @@ describe("detectIntent", () => {
     expect(detectIntent("Can I talk to a human?")).toBe("escalate");
     expect(detectIntent("I want to talk to a human")).toBe("escalate");
     expect(detectIntent("please escalate this")).toBe("escalate");
+    expect(detectIntent("connect me to an agent")).toBe("escalate");
+    expect(detectIntent("Can I speak to support?")).toBe("escalate");
+    expect(detectIntent("Human please")).toBe("escalate");
+    expect(detectIntent("I need a real person")).toBe("escalate");
     expect(detectIntent("how to create account")).toBe("question");
     expect(detectIntent("What is the travel agent processing fee?")).toBe("question");
     expect(detectIntent("personal account recovery")).toBe("question");
+  });
+});
+
+describe("answer confidence", () => {
+  it("rejects weak retrieval as insufficient at 0.75", () => {
+    expect(DEFAULT_ANSWER_CONFIDENCE_THRESHOLD).toBe(0.75);
+    expect(knowledgeIsSufficient([hit({ score: 0.375 })], 0.75)).toBe(false);
+    expect(knowledgeIsSufficient([hit({ score: 0.8 })], 0.75)).toBe(true);
+    expect(knowledgeIsSufficient([], 0.75)).toBe(false);
+  });
+});
+
+describe("learned knowledge sanitization", () => {
+  it("redacts emails, phones, cards, and secrets", () => {
+    const raw =
+      "Customer  with email ahmed@example.com called +1-555-010-9999. Card 4111111111111111. Key sk-or-abcdefghijklmnop. Token Bearer abc.def. Hex 0123456789abcdef0123456789abcdef.";
+    const clean = sanitizeLearnedText(raw);
+    expect(clean).not.toMatch(/ahmed@example.com/i);
+    expect(clean).toContain("[email]");
+    expect(clean).toContain("[phone]");
+    expect(clean).toContain("[card]");
+    expect(clean).toContain("[api-key]");
+    expect(clean).toContain("[id]");
+    expect(clean).not.toContain("Bearer abc.def");
   });
 });

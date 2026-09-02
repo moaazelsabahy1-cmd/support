@@ -130,7 +130,7 @@ describe("learn loop e2e", () => {
 
     await prisma.conversation.update({
       where: { id: handoff.conversationId! },
-      data: { status: "CLOSED", aiPaused: false },
+      data: { status: "CLOSED", aiPaused: false, agentId },
     });
     const closed = await prisma.conversation.findUnique({ where: { id: handoff.conversationId! } });
     expect(closed?.status).toBe("CLOSED");
@@ -142,6 +142,7 @@ describe("learn loop e2e", () => {
     expect(candidate!.status).toBe("PENDING_REVIEW");
     const meta = (candidate!.metadata || {}) as Record<string, unknown>;
     expect(meta.sourceConversationId).toBe(handoff.conversationId);
+    expect(meta.resolvedBy).toBe(agentId);
     expect(candidate!.question).toBeTruthy();
     expect(candidate!.answer).toBeTruthy();
     learnedId = candidate!.id;
@@ -241,4 +242,71 @@ describe("learn loop e2e", () => {
       JSON.stringify(matrix, null, 2),
     ).toEqual([]);
   }, 300_000);
+
+  it("does not extract from open chats or closed chats without a human reply", async () => {
+    const openConv = await prisma.conversation.create({
+      data: {
+        id: newId(),
+        customerId,
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        status: "OPEN",
+      },
+    });
+    await prisma.message.create({
+      data: {
+        id: newId(),
+        conversationId: openConv.id,
+        senderId: agentId,
+        body: "This should not be learned while open.",
+        attachmentIds: [],
+        readBy: [agentId],
+        role: "HUMAN",
+      },
+    });
+    expect(await extractConversationKnowledge(openConv.id)).toBeNull();
+
+    const closedNoHuman = await prisma.conversation.create({
+      data: {
+        id: newId(),
+        customerId,
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        status: "CLOSED",
+      },
+    });
+    await prisma.message.create({
+      data: {
+        id: newId(),
+        conversationId: closedNoHuman.id,
+        senderId: customerId,
+        body: "Still waiting.",
+        attachmentIds: [],
+        readBy: [customerId],
+        role: "CUSTOMER",
+      },
+    });
+    expect(await extractConversationKnowledge(closedNoHuman.id)).toBeNull();
+  }, 30_000);
+
+  it("does not retrieve REJECTED conversation knowledge", async () => {
+    const rejectedId = newId();
+    await prisma.knowledgeSource.create({
+      data: {
+        id: rejectedId,
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        type: "CONVERSATION",
+        title: `Rejected probe ${nonce}`,
+        status: "REJECTED",
+        question: `Rejected unique probe ${nonce}`,
+        answer: "Should never be retrieved after rejection.",
+        createdBy: agentId,
+        chunkCount: 0,
+      },
+    });
+    const hits = await retrieveKnowledge({
+      query: `Rejected unique probe ${nonce}`,
+      filters: { organizationId: DEFAULT_ORGANIZATION_ID },
+    });
+    expect(hits.hits.every((h) => h.sourceId !== rejectedId)).toBe(true);
+    await prisma.knowledgeSource.delete({ where: { id: rejectedId } }).catch(() => undefined);
+  }, 30_000);
 });

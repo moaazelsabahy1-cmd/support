@@ -67,9 +67,12 @@ export function getEnv(): Env {
   return cached;
 }
 
+/** Answer vs handoff. Retrieval still uses KNOWLEDGE_MIN_SCORE (default 0.35). */
+export const DEFAULT_ANSWER_CONFIDENCE_THRESHOLD = 0.75;
+
 export function knowledgeConfidenceThreshold() {
   const env = getEnv();
-  return env.AI_KNOWLEDGE_CONFIDENCE_THRESHOLD ?? env.KNOWLEDGE_MIN_SCORE;
+  return env.AI_KNOWLEDGE_CONFIDENCE_THRESHOLD ?? DEFAULT_ANSWER_CONFIDENCE_THRESHOLD;
 }
 
 export function isConfigured(value?: string | null) {

@@ -11,6 +11,7 @@ type Source = {
   type: "QA" | "FILE" | "WEB" | "CONVERSATION";
   title: string;
   status: string;
+  organizationId?: string;
   chunkCount?: number;
   createdAt?: string;
   indexedAt?: string | null;
@@ -21,7 +22,13 @@ type Source = {
   filename?: string;
   category?: string;
   tags?: string[];
-  metadata?: { crawlMode?: string; sourceConversationId?: string; replacesSourceId?: string };
+  metadata?: {
+    crawlMode?: string;
+    sourceConversationId?: string;
+    replacesSourceId?: string;
+    resolvedBy?: string | null;
+    handoffReason?: string | null;
+  };
 };
 
 type Overview = {
@@ -235,10 +242,24 @@ function ReviewPanel({
   onAct: (id: string, action: string, body?: unknown) => void;
   onPreview: (s: Source) => void;
 }) {
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ question: "", answer: "", category: "General", tags: "" });
+
+  function startEdit(item: Source) {
+    setEditingId(item._id);
+    setDraft({
+      question: item.question || "",
+      answer: item.answer || "",
+      category: item.category || "General",
+      tags: (item.tags || []).join(", "),
+    });
+  }
+
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Conversation extracts wait here until you approve them into the same Q&amp;A index. Approving does not overwrite the older source.
+        Conversation extracts wait here until you approve them into the same Q&amp;A index. Approving a candidate that
+        versions an older source disables the previous READY item after the new one is indexed.
       </p>
       {!items.length ? (
         <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">
@@ -249,23 +270,85 @@ function ReviewPanel({
         {items.map((item) => (
           <li key={item._id} className="rounded-xl border p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-medium">{item.title}</p>
                 <Badge tone={statusTone(item.status)}>{item.status}</Badge>
-                {item.question ? <p className="mt-2 text-sm"><strong>Q:</strong> {item.question}</p> : null}
-                {item.answer ? <p className="mt-1 text-sm"><strong>A:</strong> {item.answer}</p> : null}
+                {editingId === item._id ? (
+                  <div className="mt-3 space-y-2">
+                    <div>
+                      <Label>Question</Label>
+                      <Textarea value={draft.question} onChange={(e) => setDraft((d) => ({ ...d, question: e.target.value }))} />
+                    </div>
+                    <div>
+                      <Label>Answer</Label>
+                      <Textarea value={draft.answer} onChange={(e) => setDraft((d) => ({ ...d, answer: e.target.value }))} />
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <div>
+                        <Label>Category</Label>
+                        <select
+                          className="h-10 w-full rounded-lg border bg-card px-2 text-sm"
+                          value={draft.category}
+                          onChange={(e) => setDraft((d) => ({ ...d, category: e.target.value }))}
+                        >
+                          {CATEGORIES.map((c) => (
+                            <option key={c}>{c}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <Label>Tags</Label>
+                        <Input value={draft.tags} onChange={(e) => setDraft((d) => ({ ...d, tags: e.target.value }))} />
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          onAct(item._id, "patch", {
+                            question: draft.question,
+                            answer: draft.answer,
+                            category: draft.category,
+                            tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
+                            title: draft.question.slice(0, 120),
+                          });
+                          setEditingId(null);
+                        }}
+                      >
+                        Save
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    {item.question ? <p className="mt-2 text-sm"><strong>Q:</strong> {item.question}</p> : null}
+                    {item.answer ? <p className="mt-1 text-sm"><strong>A:</strong> {item.answer}</p> : null}
+                  </>
+                )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {item.category ? `${item.category}` : "Uncategorized"}
+                  {item.tags?.length ? ` · ${item.tags.join(", ")}` : ""}
+                  {item.organizationId ? ` · org ${item.organizationId}` : ""}
+                  {item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString()}` : ""}
+                </p>
                 {item.metadata?.sourceConversationId ? (
                   <p className="mt-1 text-xs text-muted-foreground">
                     Conversation {item.metadata.sourceConversationId.slice(-8)}
-                    {item.metadata.replacesSourceId ? ` · version of ${item.metadata.replacesSourceId.slice(-8)}` : ""}
+                    {item.metadata.resolvedBy ? ` · resolved by ${item.metadata.resolvedBy.slice(-8)}` : ""}
+                    {item.metadata.handoffReason ? ` · ${item.metadata.handoffReason}` : ""}
+                    {item.metadata.replacesSourceId ? ` · versions ${item.metadata.replacesSourceId.slice(-8)}` : ""}
                   </p>
                 ) : null}
               </div>
             </div>
             <div className="mt-2 flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => onPreview(item)}>Edit / view</Button>
+              <Button size="sm" variant="outline" onClick={() => onPreview(item)}>View</Button>
               {item.status === "PENDING_REVIEW" ? (
                 <>
+                  <Button size="sm" variant="outline" onClick={() => startEdit(item)}>Edit</Button>
                   <Button size="sm" onClick={() => onAct(item._id, "approve")}>Approve</Button>
                   <Button size="sm" variant="outline" onClick={() => onAct(item._id, "reject")}>Reject</Button>
                 </>

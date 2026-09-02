@@ -212,8 +212,16 @@ export async function updateTicketAction(id: string, input: unknown) {
   const updated = await prisma.ticket.update({ where: { id: ticket.id }, data: set });
   emitToTicket(id, "ticket:updated", serialize(updated));
   if (data.status === "RESOLVED" || data.status === "CLOSED") {
-    const linked = await prisma.conversation.findMany({ where: { ticketId: ticket.id }, select: { id: true } });
-    for (const c of linked) await extractConversationKnowledge(c.id);
+    const linked = await prisma.conversation.findMany({ where: { ticketId: ticket.id }, select: { id: true, status: true } });
+    for (const c of linked) {
+      if (c.status !== "CLOSED") {
+        await prisma.conversation.update({
+          where: { id: c.id },
+          data: { status: "CLOSED", aiPaused: false },
+        });
+      }
+      await extractConversationKnowledge(c.id);
+    }
   }
   if (data.status === "RESOLVED") {
     await notifyUser({

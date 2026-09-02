@@ -10,7 +10,7 @@ import type { AiHandoffReason, PublicSourceRef } from "@/types";
 import type { Prisma } from "@prisma/client";
 
 const NO_KNOWLEDGE =
-  "I don't have enough information to answer that. Talk to a human agent and we can help you directly.";
+  "I don't have enough verified information to answer that.\nI'll connect you with a human agent.";
 const EMPTY_REPLY =
   "I could not generate an answer. Please create a support ticket or talk to a human agent.";
 const PROVIDER_FAIL =
@@ -81,7 +81,7 @@ export async function answerQuestion(opts: {
       response: NO_KNOWLEDGE,
       sources: [],
       retrievalScores: chunks.map((c) => c.score),
-      escalated: false,
+      escalated: true,
       knowledgeSufficient: false,
       handoffReason,
       confidence: top,
@@ -131,7 +131,7 @@ export async function answerQuestion(opts: {
       response: PROVIDER_FAIL,
       sources: publicSources,
       retrievalScores: chunks.map((c) => c.score),
-      escalated: false,
+      escalated: true,
       knowledgeSufficient: false,
       handoffReason: "AI_ERROR",
       confidence: top,

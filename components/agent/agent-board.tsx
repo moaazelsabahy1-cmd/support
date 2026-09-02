@@ -12,7 +12,14 @@ export function AgentBoard() {
   const { data } = useSession();
   const [unassigned, setUnassigned] = useState<{ _id: string; number: string; title: string }[]>([]);
   const [chats, setChats] = useState<
-    { _id: string; aiPaused?: boolean; status?: string; handoffReason?: string | null; lastQuestion?: string | null }[]
+    {
+      _id: string;
+      aiPaused?: boolean;
+      status?: string;
+      handoffReason?: string | null;
+      lastQuestion?: string | null;
+      customer?: { name?: string; email?: string } | null;
+    }[]
   >([]);
 
   useEffect(() => {
@@ -45,11 +52,13 @@ export function AgentBoard() {
           {waiting.map((c) => (
             <li key={c._id} className="flex items-center justify-between gap-3 text-sm">
               <span>
+                {c.customer?.name ? `${c.customer.name} · ` : ""}
                 {c.lastQuestion?.slice(0, 80) || `Chat ${c._id.slice(-6)}`}
                 {c.handoffReason ? <span className="block text-xs text-muted-foreground">{c.handoffReason}</span> : null}
+                {c.customer?.email ? <span className="block text-xs text-muted-foreground">{c.customer.email}</span> : null}
               </span>
               <Button size="sm" asChild>
-                <a href="/chat">Open chat</a>
+                <a href={`/chat/${c._id}`}>Open chat</a>
               </Button>
             </li>
           ))}

@@ -1,13 +1,18 @@
 const ESCALATE_PHRASES = [
   "talk to a human",
   "talk to an agent",
+  "talk to support",
   "speak to a human",
   "speak to an agent",
+  "speak to support",
+  "connect me to an agent",
   "connect me to a real person",
+  "i need a real person",
   "real person",
   "i want a human",
   "i want to talk to a human",
   "human agent",
+  "human please",
 ];
 
 export function detectIntent(message: string) {

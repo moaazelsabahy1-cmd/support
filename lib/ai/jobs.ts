@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { prisma } from "@/lib/db";
-import { ingestSource } from "@/lib/ai/ingest";
+import { ingestSource, removeSourceVectors } from "@/lib/ai/ingest";
 import { aiLog, aiWarn } from "@/lib/ai/log";
 import { AppError } from "@/lib/api-response";
 import { knowledgeOrgId } from "@/lib/ai/org";
@@ -62,6 +62,7 @@ export async function runIndexJob(jobId: string) {
   });
   try {
     await ingestSource(job.sourceId);
+    await supersedeReplacedSource(job.sourceId);
     await prisma.knowledgeIndexJob.update({
       where: { jobId },
       data: { status: "COMPLETED", completedAt: new Date(), error: null },
@@ -74,4 +75,22 @@ export async function runIndexJob(jobId: string) {
       data: { status: "FAILED", completedAt: new Date(), error: message },
     });
   }
+}
+
+async function supersedeReplacedSource(sourceId: string) {
+  const source = await prisma.knowledgeSource.findUnique({ where: { id: sourceId } });
+  if (!source || source.status !== "READY") return;
+  const meta = (source.metadata || {}) as { replacesSourceId?: string };
+  const previousId = meta.replacesSourceId;
+  if (!previousId || previousId === sourceId) return;
+  const previous = await prisma.knowledgeSource.findUnique({ where: { id: previousId } });
+  if (!previous) return;
+  if (previous.organizationId !== source.organizationId) return;
+  if (previous.status === "DISABLED" || previous.status === "REJECTED") return;
+  await prisma.knowledgeSource.update({
+    where: { id: previous.id },
+    data: { status: "DISABLED" },
+  });
+  await removeSourceVectors(previous.id);
+  aiLog("knowledge", "superseded prior source", { sourceId, previousId });
 }

@@ -1,8 +1,9 @@
 import { prisma } from "@/lib/db";
+import { enqueueIndexJob } from "@/lib/ai/jobs";
+import { retrieveKnowledge } from "@/lib/ai/retrieval";
+import { sanitizeLearnedText } from "@/lib/ai/sanitize-knowledge";
 import { getEnv } from "@/lib/env";
 import { requireLlm } from "@/lib/ai/providers";
-import { retrieveKnowledge } from "@/lib/ai/retrieval";
-import { enqueueIndexJob } from "@/lib/ai/jobs";
 import { aiLog, aiWarn } from "@/lib/ai/log";
 import { newId } from "@/lib/id";
 import { SYSTEM_AI_USER_ID } from "@/types";
@@ -22,6 +23,10 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 export async function extractConversationKnowledge(conversationId: string) {
   const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!conv) return null;
+  if (conv.status !== "CLOSED") {
+    aiLog("knowledge", "skip extract: conversation not closed", { conversationId, status: conv.status });
+    return null;
+  }
   const prior = await prisma.knowledgeSource.findMany({
     where: { type: "CONVERSATION", organizationId: conv.organizationId },
     select: { id: true, metadata: true, status: true, question: true, answer: true, title: true },
@@ -63,10 +68,10 @@ export async function extractConversationKnowledge(conversationId: string) {
     });
     const parsed = parseJsonObject(completion.text);
     extracted = {
-      question: String(parsed?.question || "").trim(),
-      answer: String(parsed?.answer || "").trim(),
-      steps: parsed?.steps ? String(parsed.steps) : undefined,
-      exceptions: parsed?.exceptions ? String(parsed.exceptions) : undefined,
+      question: sanitizeLearnedText(String(parsed?.question || "")),
+      answer: sanitizeLearnedText(String(parsed?.answer || "")),
+      steps: parsed?.steps ? sanitizeLearnedText(String(parsed.steps)) : undefined,
+      exceptions: parsed?.exceptions ? sanitizeLearnedText(String(parsed.exceptions)) : undefined,
     };
   } catch (error) {
     aiWarn("knowledge", "extract failed", { conversationId, error });
@@ -102,6 +107,7 @@ export async function extractConversationKnowledge(conversationId: string) {
     sourceMessageIds: messages.map((m) => m.id),
     createdBy: "AI",
     handoffReason: conv.handoffReason,
+    resolvedBy: conv.agentId,
     ...(replacesSourceId ? { replacesSourceId } : {}),
   };
 
@@ -125,10 +131,4 @@ export async function extractConversationKnowledge(conversationId: string) {
   if (auto) await enqueueIndexJob(source.id);
   aiLog("knowledge", "candidate created", { sourceId: source.id, auto });
   return source;
-}
-
-export function enqueueConversationLearn(conversationId: string) {
-  setImmediate(() => {
-    void extractConversationKnowledge(conversationId);
-  });
 }

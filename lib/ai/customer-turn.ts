@@ -118,6 +118,7 @@ export async function handleCustomerAiTurn(opts: {
       reason: result.handoffReason || "KNOWLEDGE_NOT_FOUND",
       lastQuestion: opts.message,
       aiResponse: result.response,
+      sources: result.sources,
       turnKey: `handoff:${key}`,
     });
     return { ...result, offerHuman: false, handedOff: true, conversationId: handed.id, aiPaused: true };

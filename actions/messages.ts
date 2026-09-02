@@ -32,6 +32,7 @@ export async function listConversationsAction() {
     orderBy: { updatedAt: "desc" },
     take: 50,
     include: {
+      customer: { select: { id: true, name: true, email: true } },
       messages: {
         where: { role: "CUSTOMER", internal: false },
         orderBy: { createdAt: "desc" },
@@ -134,7 +135,14 @@ export async function closeConversationAction(conversationId: string) {
   if (!conv) throw new AppError("NOT_FOUND", "Conversation not found", 404);
   const updated = await prisma.conversation.update({
     where: { id: conv.id },
-    data: { status: "CLOSED", aiPaused: false },
+    data: {
+      status: "CLOSED",
+      aiPaused: false,
+      agentId:
+        user.role === "AGENT" || user.role === "ADMIN" || user.role === "SUPER_ADMIN"
+          ? user.id
+          : conv.agentId,
+    },
   });
   await extractConversationKnowledge(conv.id);
   return serialize(updated);
@@ -157,6 +165,7 @@ export async function escalateAiToHumanAction(sessionId: string) {
     take: 8,
   });
   const latest = logs[0];
+  const logSources = Array.isArray(latest?.sources) ? (latest.sources as { title?: string }[]) : [];
   await persistAiHandoff({
     userId: user.id,
     conversationId: conv.id,
@@ -164,6 +173,7 @@ export async function escalateAiToHumanAction(sessionId: string) {
     reason: "CUSTOMER_REQUESTED_HUMAN",
     lastQuestion: String(latest?.question || latest?.message || "Customer requested a human agent."),
     aiResponse: latest ? String(latest.answer || latest.response || "") : undefined,
+    sources: logSources.map((s) => ({ title: String(s.title || "Source"), type: "QA" })),
     turnKey: `handoff:manual:${sessionId}`,
   });
   return serialize(await prisma.conversation.findUniqueOrThrow({ where: { id: conv.id } }));

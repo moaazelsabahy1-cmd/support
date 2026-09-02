@@ -4,7 +4,7 @@ import { emitToConversation } from "@/lib/socket-server";
 import { serialize } from "@/lib/serialize";
 import { SYSTEM_AI_USER_ID } from "@/types";
 import { newId } from "@/lib/id";
-import type { AiHandoffReason } from "@/types";
+import type { AiHandoffReason, PublicSourceRef } from "@/types";
 
 export function shouldSkipHandoff(conv: {
   aiPaused: boolean;
@@ -21,6 +21,7 @@ export async function persistAiHandoff(opts: {
   reason: AiHandoffReason;
   lastQuestion: string;
   aiResponse?: string;
+  sources?: PublicSourceRef[];
   turnKey: string;
 }) {
   const existing = await prisma.message.findFirst({
@@ -52,10 +53,16 @@ export async function persistAiHandoff(opts: {
     return prisma.conversation.findUniqueOrThrow({ where: { id: opts.conversationId } });
   }
 
+  const sourceLine = (opts.sources || [])
+    .map((s) => s.title)
+    .filter(Boolean)
+    .slice(0, 6)
+    .join(" · ");
   const summary = [
     "Connecting you with a human agent. They can see your last question and will reply in this chat.",
     `Last question: ${opts.lastQuestion}`,
     opts.aiResponse ? `Assistant: ${opts.aiResponse}` : "",
+    sourceLine ? `Retrieved sources: ${sourceLine}` : "",
     `Reason: ${opts.reason}`,
   ]
     .filter(Boolean)
