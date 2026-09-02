@@ -15,6 +15,7 @@ import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
 import { knowledgeIsSufficient } from "../lib/ai/agent";
 import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
 import { DEFAULT_ANSWER_CONFIDENCE_THRESHOLD } from "../lib/env";
+import { clampKnowledgeCategory, normalizeKnowledgeTags } from "../lib/ai/knowledge-taxonomy";
 
 const hit = (over: Partial<RetrievedHit>): RetrievedHit => ({
   sourceId: "a",
@@ -121,11 +122,19 @@ describe("grounded prompt and sources", () => {
     const msgs = groundedPrompt("What is the refund window?", [{ title: "Refund Policy", text: "Refunds take 5 days." }]);
     expect(msgs[0].content).toContain("Refunds take 5 days");
     expect(msgs[0].content).toContain("Do not invent");
+    expect(msgs[0].content).toContain("Answer as general support knowledge");
+    expect(msgs[0].content).toContain("Do not claim you remember this customer");
   });
 
   it("maps public source labels without ids", () => {
-    expect(publicSourceLabel({ title: "Pair", sourceType: "QA" })).toEqual({ title: "Training knowledge", type: "QA" });
-    expect(publicSourceLabel({ title: "From chat", sourceType: "CONVERSATION" })).toEqual({ title: "Training knowledge", type: "QA" });
+    expect(publicSourceLabel({ title: "Pair", sourceType: "QA" })).toEqual({
+      title: "Verified support knowledge",
+      type: "QA",
+    });
+    expect(publicSourceLabel({ title: "From chat", sourceType: "CONVERSATION" })).toEqual({
+      title: "Verified support knowledge",
+      type: "QA",
+    });
     expect(publicSourceLabel({ title: "Guide.pdf", sourceType: "FILE" }).title).toBe("Guide.pdf");
     expect(publicSourceLabel({ title: "Help", sourceType: "WEB", url: "https://x.test" }).url).toBe("https://x.test");
   });
@@ -197,6 +206,19 @@ describe("answer confidence", () => {
     expect(knowledgeIsSufficient([hit({ score: 0.375 })], 0.75)).toBe(false);
     expect(knowledgeIsSufficient([hit({ score: 0.8 })], 0.75)).toBe(true);
     expect(knowledgeIsSufficient([], 0.75)).toBe(false);
+  });
+});
+
+describe("knowledge taxonomy", () => {
+  it("clamps unknown categories to General and keeps conversation-learn tags", () => {
+    expect(clampKnowledgeCategory("Technical Support")).toBe("Technical Support");
+    expect(clampKnowledgeCategory("billing")).toBe("Billing");
+    expect(clampKnowledgeCategory("not-a-real-category")).toBe("General");
+    expect(normalizeKnowledgeTags(["Device", "Settings"], ["conversation-learn"])).toEqual([
+      "device",
+      "settings",
+      "conversation-learn",
+    ]);
   });
 });
 

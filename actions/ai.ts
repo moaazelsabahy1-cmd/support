@@ -17,6 +17,7 @@ import { knowledgeOrgId } from "@/lib/ai/org";
 import { escalateAiToHumanAction } from "@/actions/messages";
 import { AppError } from "@/lib/api-response";
 import { assertSafeHttpUrl } from "@/lib/ai/ssrf";
+import { sanitizeLearnedText } from "@/lib/ai/sanitize-knowledge";
 import { newId } from "@/lib/id";
 import type { IndexStatus, KnowledgeSourceType, Prisma } from "@prisma/client";
 
@@ -229,12 +230,12 @@ export async function patchKnowledgeSourceAction(id: string, input: unknown) {
   const data = knowledgeSourcePatchSchema.parse(input);
   const source = await loadOrgKnowledgeSource(id, user.id);
   const set: Prisma.KnowledgeSourceUpdateInput = {};
-  if (data.title) set.title = data.title;
+  if (data.title) set.title = sanitizeLearnedText(data.title);
   if (data.description !== undefined) set.description = data.description;
   if (data.category !== undefined) set.category = data.category;
   if (data.tags) set.tags = data.tags;
-  if (data.question) set.question = data.question;
-  if (data.answer) set.answer = data.answer;
+  if (data.question) set.question = sanitizeLearnedText(data.question);
+  if (data.answer) set.answer = sanitizeLearnedText(data.answer);
   if (data.enabled === false) {
     set.status = "DISABLED";
     await prisma.knowledgeSource.update({ where: { id: source.id }, data: set });
@@ -265,6 +266,7 @@ export async function rejectKnowledgeReviewAction(id: string) {
     where: { id: source.id },
     data: { status: "REJECTED" },
   });
+  await removeSourceVectors(source.id);
   return { id };
 }
 

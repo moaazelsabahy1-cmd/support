@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, Badge } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { toast } from "sonner";
+import { KNOWLEDGE_CATEGORIES } from "@/lib/ai/knowledge-taxonomy";
 
 type Source = {
   _id: string;
@@ -43,7 +44,7 @@ type Overview = {
 };
 
 const TABS = ["Overview", "Q&A", "Files", "Websites", "Review", "Indexing"] as const;
-const CATEGORIES = ["Billing", "Technical Support", "Account", "Orders", "General"];
+const CATEGORIES = KNOWLEDGE_CATEGORIES;
 
 function statusTone(status: string): "success" | "warn" | "danger" | "info" | "default" {
   if (status === "READY") return "success";

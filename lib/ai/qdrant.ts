@@ -51,6 +51,11 @@ export type QdrantPayload = {
   url?: string;
   organizationId: string;
   createdAt: string;
+  status?: string;
+  sourceConversationId?: string;
+  sourceMessageIds?: string[];
+  handoffReason?: string;
+  resolvedBy?: string;
 };
 
 export async function upsertQdrantPoints(

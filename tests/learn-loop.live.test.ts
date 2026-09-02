@@ -145,6 +145,7 @@ describe("learn loop e2e", () => {
     expect(meta.resolvedBy).toBe(agentId);
     expect(candidate!.question).toBeTruthy();
     expect(candidate!.answer).toBeTruthy();
+    expect(candidate!.tags).toContain("conversation-learn");
     learnedId = candidate!.id;
     matrix.push({
       step: "4 Knowledge candidate is extracted",
@@ -183,7 +184,18 @@ describe("learn loop e2e", () => {
     const pointsA = await searchQdrant(vector!, 8, { organizationId: DEFAULT_ORGANIZATION_ID });
     const hitA = (pointsA || []).find((p) => String((p.payload as { sourceId?: string } | undefined)?.sourceId) === learnedId);
     expect(hitA).toBeTruthy();
-    expect(String((hitA!.payload as { organizationId?: string }).organizationId)).toBe(DEFAULT_ORGANIZATION_ID);
+    const payloadA = hitA!.payload as {
+      organizationId?: string;
+      sourceId?: string;
+      sourceConversationId?: string;
+      resolvedBy?: string;
+      status?: string;
+    };
+    expect(String(payloadA.organizationId)).toBe(DEFAULT_ORGANIZATION_ID);
+    expect(String(payloadA.sourceId)).toBe(learnedId);
+    expect(payloadA.sourceConversationId).toBe(handoff.conversationId);
+    expect(payloadA.resolvedBy).toBe(agentId);
+    expect(payloadA.status).toBe("READY");
     const pointsB = await searchQdrant(vector!, 8, { organizationId: ORG_B });
     expect((pointsB || []).some((p) => String((p.payload as { sourceId?: string } | undefined)?.sourceId) === learnedId)).toBe(
       false,
@@ -198,10 +210,40 @@ describe("learn loop e2e", () => {
     expect(again.handedOff).toBe(false);
     expect(again.knowledgeSufficient).toBe(true);
     expect(again.response).toContain(nonce);
+    expect(again.sources.every((s) => s.title === "Verified support knowledge")).toBe(true);
+    expect(JSON.stringify(again.sources)).not.toContain(handoff.conversationId);
     matrix.push({
       step: "9–10 Same question → AI answers from learned knowledge",
       result: "PASS",
       impl: "retrieveKnowledge + answerQuestion",
+    });
+
+    const paraphrase = await handleCustomerAiTurn({
+      userId: customerId,
+      message: `What's the process for looking up the Solvio learn-loop handoff code for probe ${nonce}?`,
+      sessionId: `learn-paraphrase-${Date.now()}`,
+    });
+    expect(paraphrase.handedOff).toBe(false);
+    expect(paraphrase.knowledgeSufficient).toBe(true);
+    expect(paraphrase.response).toContain(nonce);
+    matrix.push({
+      step: "5 Similar wording → AI answers from approved knowledge",
+      result: "PASS",
+      impl: "handleCustomerAiTurn paraphrase",
+    });
+
+    const differentWording = await handleCustomerAiTurn({
+      userId: customerId,
+      message: `I need the Solvio learn-loop handoff code used for probe ${nonce}.`,
+      sessionId: `learn-wording-${Date.now()}`,
+    });
+    expect(differentWording.handedOff).toBe(false);
+    expect(differentWording.knowledgeSufficient).toBe(true);
+    expect(differentWording.response).toContain(nonce);
+    matrix.push({
+      step: "6 Different wording → approved knowledge retrieved",
+      result: "PASS",
+      impl: "handleCustomerAiTurn second paraphrase",
     });
 
     const orgBHits = await retrieveKnowledge({

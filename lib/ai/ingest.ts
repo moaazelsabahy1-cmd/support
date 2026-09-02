@@ -124,6 +124,14 @@ async function persistChunks(
     }
   }
 
+  const meta = (source.metadata || {}) as Record<string, unknown>;
+  const sourceConversationId = typeof meta.sourceConversationId === "string" ? meta.sourceConversationId : undefined;
+  const sourceMessageIds = Array.isArray(meta.sourceMessageIds)
+    ? meta.sourceMessageIds.filter((id): id is string => typeof id === "string")
+    : undefined;
+  const handoffReason = typeof meta.handoffReason === "string" ? meta.handoffReason : undefined;
+  const resolvedBy = typeof meta.resolvedBy === "string" ? meta.resolvedBy : undefined;
+
   const model = embeddingModelName();
   const points: Parameters<typeof upsertQdrantPoints>[0] = [];
   const docs = chunks.map((chunk, i) => {
@@ -145,6 +153,11 @@ async function persistChunks(
           url: source.sourceUrl ?? undefined,
           organizationId: source.organizationId,
           createdAt: new Date().toISOString(),
+          status: "READY",
+          ...(sourceConversationId ? { sourceConversationId } : {}),
+          ...(sourceMessageIds?.length ? { sourceMessageIds } : {}),
+          ...(handoffReason ? { handoffReason } : {}),
+          ...(resolvedBy ? { resolvedBy } : {}),
         },
       });
     }

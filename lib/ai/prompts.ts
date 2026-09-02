@@ -53,11 +53,13 @@ export function groundedPrompt(
       content: `You are ${name}, a customer support assistant.
 
 Use the retrieved knowledge as the source of truth.
+Answer as general support knowledge. Do not claim you remember this customer, another customer, or a previous private conversation.
+Never expose customer identities, emails, phone numbers, or private conversation details.
 Do not invent company policies, prices, or procedures.
 If the knowledge does not contain the answer, say so clearly and offer to talk to a human agent.
 Do not claim a source says something it does not say.
 Keep answers concise and useful.
-Mention relevant sources by title when available.${languageLine}
+When citing, refer to verified support knowledge. Do not mention conversation IDs or private chat provenance.${languageLine}
 
 Retrieved knowledge:
 ${context || "(no knowledge retrieved)"}`,
@@ -70,7 +72,7 @@ ${context || "(no knowledge retrieved)"}`,
 export function publicSourceLabel(hit: { title: string; sourceType: string; url?: string }) {
   const type = String(hit.sourceType).toUpperCase();
   if (type === "QA" || type === "TRAINING" || type === "CONVERSATION") {
-    return { title: "Training knowledge", type: "QA" as const };
+    return { title: "Verified support knowledge", type: "QA" as const };
   }
   if (type === "WEB") {
     return { title: hit.title, type: "WEB" as const, url: hit.url };

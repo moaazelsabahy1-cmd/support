@@ -6,6 +6,7 @@ import { getEnv } from "@/lib/env";
 import { requireLlm } from "@/lib/ai/providers";
 import { aiLog, aiWarn } from "@/lib/ai/log";
 import { newId } from "@/lib/id";
+import { clampKnowledgeCategory, normalizeKnowledgeTags } from "@/lib/ai/knowledge-taxonomy";
 import { SYSTEM_AI_USER_ID } from "@/types";
 
 function parseJsonObject(text: string): Record<string, unknown> | null {
@@ -52,7 +53,15 @@ export async function extractConversationKnowledge(conversationId: string) {
     .join("\n")
     .slice(0, 12000);
 
-  let extracted: { question: string; answer: string; steps?: string; exceptions?: string };
+  let extracted: {
+    title: string;
+    question: string;
+    answer: string;
+    steps?: string;
+    exceptions?: string;
+    category: string;
+    tags: string[];
+  };
   try {
     const llm = requireLlm();
     const completion = await llm.generateText({
@@ -61,17 +70,21 @@ export async function extractConversationKnowledge(conversationId: string) {
         {
           role: "system",
           content:
-            "Extract reusable support knowledge from a resolved conversation. Return JSON only with keys question, answer, steps, exceptions. Omit greetings, PII, emails, phone numbers, and one-off personal details. If nothing reusable exists, return {\"question\":\"\",\"answer\":\"\"}.",
+            'Extract reusable support knowledge from a resolved conversation. Return JSON only with keys title, question, answer, steps, exceptions, category, tags. category must be one of: Billing, Technical Support, Account, Orders, General. tags is a short string array. Omit greetings, PII, emails, phone numbers, and one-off personal details. Do not include customer names or private identifiers. If nothing reusable exists, return {"question":"","answer":""}.',
         },
         { role: "user", content: transcript },
       ],
     });
     const parsed = parseJsonObject(completion.text);
+    const question = sanitizeLearnedText(String(parsed?.question || ""));
     extracted = {
-      question: sanitizeLearnedText(String(parsed?.question || "")),
+      title: sanitizeLearnedText(String(parsed?.title || question)).slice(0, 120),
+      question,
       answer: sanitizeLearnedText(String(parsed?.answer || "")),
       steps: parsed?.steps ? sanitizeLearnedText(String(parsed.steps)) : undefined,
       exceptions: parsed?.exceptions ? sanitizeLearnedText(String(parsed.exceptions)) : undefined,
+      category: clampKnowledgeCategory(parsed?.category),
+      tags: normalizeKnowledgeTags(parsed?.tags, ["conversation-learn"]).map((t) => sanitizeLearnedText(t)),
     };
   } catch (error) {
     aiWarn("knowledge", "extract failed", { conversationId, error });
@@ -117,12 +130,12 @@ export async function extractConversationKnowledge(conversationId: string) {
       id: newId(),
       organizationId: conv.organizationId,
       type: "CONVERSATION",
-      title: extracted.question.slice(0, 120),
+      title: (extracted.title || extracted.question).slice(0, 120),
       status: auto ? "PENDING" : "PENDING_REVIEW",
       question: extracted.question,
       answer,
-      category: "General",
-      tags: ["conversation-learn"],
+      category: extracted.category,
+      tags: extracted.tags.length ? extracted.tags : ["conversation-learn"],
       createdBy: SYSTEM_AI_USER_ID,
       chunkCount: 0,
       metadata,
