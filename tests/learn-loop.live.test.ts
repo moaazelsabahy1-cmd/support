@@ -309,4 +309,27 @@ describe("learn loop e2e", () => {
     expect(hits.hits.every((h) => h.sourceId !== rejectedId)).toBe(true);
     await prisma.knowledgeSource.delete({ where: { id: rejectedId } }).catch(() => undefined);
   }, 30_000);
+
+  it("does not retrieve PENDING_REVIEW conversation knowledge", async () => {
+    const pendingId = newId();
+    await prisma.knowledgeSource.create({
+      data: {
+        id: pendingId,
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        type: "CONVERSATION",
+        title: `Pending probe ${nonce}`,
+        status: "PENDING_REVIEW",
+        question: `Pending unique probe ${nonce}`,
+        answer: "Should never be retrieved before approval.",
+        createdBy: agentId,
+        chunkCount: 0,
+      },
+    });
+    const hits = await retrieveKnowledge({
+      query: `Pending unique probe ${nonce}`,
+      filters: { organizationId: DEFAULT_ORGANIZATION_ID },
+    });
+    expect(hits.hits.every((h) => h.sourceId !== pendingId)).toBe(true);
+    await prisma.knowledgeSource.delete({ where: { id: pendingId } }).catch(() => undefined);
+  }, 30_000);
 });

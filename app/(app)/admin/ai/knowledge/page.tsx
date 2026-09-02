@@ -1,12 +1,11 @@
 import { KnowledgeHub } from "@/components/admin/knowledge-hub";
-import { requireRoles } from "@/lib/session";
-import { redirect } from "next/navigation";
+import { getSessionUser } from "@/lib/session";
+import { forbidden } from "next/navigation";
 
 export default async function Page() {
-  try {
-    await requireRoles(["ADMIN", "SUPER_ADMIN"]);
-  } catch {
-    redirect("/dashboard");
+  const user = await getSessionUser();
+  if (!user || (user.role !== "ADMIN" && user.role !== "SUPER_ADMIN")) {
+    forbidden();
   }
   return <KnowledgeHub />;
 }

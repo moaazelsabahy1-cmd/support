@@ -2,6 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requirePermission, requireUser } from "@/lib/session";
+import { loadOrgKnowledgeSource, requireKnowledgeAdmin } from "@/lib/ai/knowledge-access";
 import { serialize } from "@/lib/serialize";
 import {
   knowledgeListSchema,
@@ -25,7 +26,7 @@ export async function aiChatAction(message: string, sessionId: string) {
 }
 
 export async function listKnowledgeSourcesAction(input?: unknown) {
-  const user = await requirePermission("ai.sources.manage");
+  const user = await requireKnowledgeAdmin();
   const raw = (input || {}) as Record<string, unknown>;
   const cleaned = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== "" && v != null));
   const q = knowledgeListSchema.parse(cleaned);
@@ -54,7 +55,7 @@ export async function listKnowledgeSourcesAction(input?: unknown) {
 }
 
 export async function knowledgeOverviewAction() {
-  const user = await requirePermission("ai.sources.manage");
+  const user = await requireKnowledgeAdmin();
   const org = await knowledgeOrgId(user.id);
   const [total, ready, processing, failed, disabled, pending, pendingReview, chunkCount, last, jobs] = await Promise.all([
     prisma.knowledgeSource.count({ where: { organizationId: org } }),
@@ -122,7 +123,7 @@ export async function upsertTrainingPairAction(id: string | null, input: unknown
   const data = trainingPairSchema.parse(input);
   const org = await knowledgeOrgId(user.id);
   if (id) {
-    const existing = await prisma.knowledgeSource.findFirst({ where: { id, type: "QA" } });
+    const existing = await prisma.knowledgeSource.findFirst({ where: { id, type: "QA", organizationId: org } });
     if (!existing) throw new AppError("NOT_FOUND", "Training pair not found", 404);
     const status = data.enabled === false ? "DISABLED" : "PENDING";
     await prisma.knowledgeSource.update({
@@ -163,13 +164,14 @@ export async function upsertTrainingPairAction(id: string | null, input: unknown
 }
 
 export async function deleteTrainingPairAction(id: string) {
-  await requirePermission("ai.train");
+  const user = await requirePermission("ai.train");
+  await loadOrgKnowledgeSource(id, user.id);
   await deleteKnowledgeSource(id);
   return { ok: true };
 }
 
 export async function listAiSourcesAction() {
-  const user = await requirePermission("ai.sources.manage");
+  const user = await requireKnowledgeAdmin();
   const org = await knowledgeOrgId(user.id);
   const [files, web] = await Promise.all([
     prisma.knowledgeSource.findMany({ where: { organizationId: org, type: "FILE" }, orderBy: { createdAt: "desc" } }),
@@ -201,7 +203,7 @@ export async function listAiSourcesAction() {
 }
 
 export async function ingestWebSourceAction(input: unknown) {
-  const user = await requirePermission("ai.sources.manage");
+  const user = await requireKnowledgeAdmin();
   const data = webSourceSchema.parse(input);
   assertSafeHttpUrl(data.url);
   const created = await prisma.knowledgeSource.create({
@@ -223,10 +225,9 @@ export async function ingestWebSourceAction(input: unknown) {
 }
 
 export async function patchKnowledgeSourceAction(id: string, input: unknown) {
-  await requirePermission("ai.sources.manage");
+  const user = await requireKnowledgeAdmin();
   const data = knowledgeSourcePatchSchema.parse(input);
-  const source = await prisma.knowledgeSource.findUnique({ where: { id } });
-  if (!source) throw new AppError("NOT_FOUND", "Source not found", 404);
+  const source = await loadOrgKnowledgeSource(id, user.id);
   const set: Prisma.KnowledgeSourceUpdateInput = {};
   if (data.title) set.title = data.title;
   if (data.description !== undefined) set.description = data.description;
@@ -252,14 +253,14 @@ export async function patchKnowledgeSourceAction(id: string, input: unknown) {
 }
 
 export async function approveKnowledgeReviewAction(id: string) {
-  await requirePermission("ai.sources.manage");
-  return approveKnowledgeSource(id);
+  const user = await requireKnowledgeAdmin();
+  const source = await loadOrgKnowledgeSource(id, user.id);
+  return approveKnowledgeSource(source.id);
 }
 
 export async function rejectKnowledgeReviewAction(id: string) {
-  await requirePermission("ai.sources.manage");
-  const source = await prisma.knowledgeSource.findUnique({ where: { id } });
-  if (!source) throw new AppError("NOT_FOUND", "Source not found", 404);
+  const user = await requireKnowledgeAdmin();
+  const source = await loadOrgKnowledgeSource(id, user.id);
   await prisma.knowledgeSource.update({
     where: { id: source.id },
     data: { status: "REJECTED" },
@@ -268,9 +269,8 @@ export async function rejectKnowledgeReviewAction(id: string) {
 }
 
 export async function reindexKnowledgeSourceAction(id: string) {
-  await requirePermission("ai.sources.manage");
-  const source = await prisma.knowledgeSource.findUnique({ where: { id } });
-  if (!source) throw new AppError("NOT_FOUND", "Source not found", 404);
+  const user = await requireKnowledgeAdmin();
+  const source = await loadOrgKnowledgeSource(id, user.id);
   await prisma.knowledgeSource.update({
     where: { id: source.id },
     data: { status: "PENDING", errorCode: null, errorMessage: null },
@@ -280,8 +280,9 @@ export async function reindexKnowledgeSourceAction(id: string) {
 }
 
 export async function deleteKnowledgeSourceAction(id: string) {
-  await requirePermission("ai.sources.manage");
-  await deleteKnowledgeSource(id);
+  const user = await requireKnowledgeAdmin();
+  const source = await loadOrgKnowledgeSource(id, user.id);
+  await deleteKnowledgeSource(source.id);
   return { ok: true };
 }
 

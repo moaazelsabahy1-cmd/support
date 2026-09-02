@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { jsonOk, jsonFail, toErrorResponse } from "@/lib/api-response";
 import { ingestWebSourceAction, listAiSourcesAction } from "@/actions/ai";
-import { requirePermission } from "@/lib/session";
+import { requireKnowledgeAdmin } from "@/lib/ai/knowledge-access";
 import { prisma } from "@/lib/db";
 import { upload, validateKnowledgeFile } from "@/lib/storage";
 import { enqueueIndexJob } from "@/lib/ai/jobs";
@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     if (ct.includes("application/json")) {
       return jsonOk(await ingestWebSourceAction(await req.json()), 201);
     }
-    const user = await requirePermission("ai.sources.manage");
+    const user = await requireKnowledgeAdmin();
     const form = await req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) return jsonFail("NO_FILE", "File required");

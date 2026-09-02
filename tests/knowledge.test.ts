@@ -10,6 +10,7 @@ import { qdrantPointId } from "../lib/ai/qdrant";
 import { hasPermission } from "../lib/permissions";
 import { trainingPairSchema, webSourceSchema } from "../lib/validation";
 import { AppError } from "../lib/api-response";
+import { assertSameKnowledgeOrg } from "../lib/ai/knowledge-access";
 import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
 import { knowledgeIsSufficient } from "../lib/ai/agent";
 import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
@@ -147,9 +148,12 @@ describe("validation and permissions", () => {
 
   it("requires admin knowledge permissions", () => {
     expect(hasPermission("CUSTOMER", "ai.sources.manage")).toBe(false);
+    expect(hasPermission("AGENT", "ai.sources.manage")).toBe(false);
+    expect(hasPermission("AGENT", "ai.train")).toBe(false);
     expect(hasPermission("CUSTOMER", "ai.train")).toBe(false);
     expect(hasPermission("ADMIN", "ai.train")).toBe(true);
     expect(hasPermission("ADMIN", "ai.sources.manage")).toBe(true);
+    expect(hasPermission("SUPER_ADMIN", "ai.sources.manage")).toBe(true);
   });
 });
 
@@ -208,5 +212,19 @@ describe("learned knowledge sanitization", () => {
     expect(clean).toContain("[api-key]");
     expect(clean).toContain("[id]");
     expect(clean).not.toContain("Bearer abc.def");
+  });
+});
+
+describe("knowledge tenant access", () => {
+  it("forbids cross-organization source access", () => {
+    expect(() => assertSameKnowledgeOrg("org_a", "org_a")).not.toThrow();
+    try {
+      assertSameKnowledgeOrg("org_a", "org_b");
+      throw new Error("expected forbidden");
+    } catch (error) {
+      expect(error).toBeInstanceOf(AppError);
+      expect((error as AppError).status).toBe(403);
+      expect((error as AppError).code).toBe("FORBIDDEN");
+    }
   });
 });
