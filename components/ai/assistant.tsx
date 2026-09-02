@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
+import { newBrowserId } from "@/lib/browser-id";
 
 export function AiAssistant() {
   const sessionId = useMemo(() => {
@@ -12,7 +13,7 @@ export function AiAssistant() {
     const key = "solvio-ai-session";
     const existing = sessionStorage.getItem(key);
     if (existing) return existing;
-    const id = crypto.randomUUID();
+    const id = newBrowserId();
     sessionStorage.setItem(key, id);
     return id;
   }, []);

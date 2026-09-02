@@ -7,6 +7,7 @@ import { Bot, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { OPEN_ASSISTANT_EVENT } from "@/components/marketing/open-assistant";
+import { newBrowserId } from "@/lib/browser-id";
 
 const KEY = process.env.NEXT_PUBLIC_WIDGET_KEY || "solvio-widget-dev-key";
 const SESSION_KEY = "solvio-assistant-session";
@@ -21,13 +22,13 @@ function readStored(): { sessionId: string; messages: ChatMessage[] } {
     return { sessionId: "", messages: [] };
   }
   try {
-    const sessionId = sessionStorage.getItem(SESSION_KEY) || crypto.randomUUID();
+    const sessionId = sessionStorage.getItem(SESSION_KEY) || newBrowserId();
     sessionStorage.setItem(SESSION_KEY, sessionId);
     const raw = sessionStorage.getItem(MESSAGES_KEY);
     const messages: ChatMessage[] = raw ? JSON.parse(raw) : [];
     return { sessionId, messages };
   } catch {
-    return { sessionId: crypto.randomUUID(), messages: [] };
+    return { sessionId: newBrowserId(), messages: [] };
   }
 }
 
@@ -151,7 +152,7 @@ export function AiWidget() {
   }
 
   function resetConversation() {
-    const next = crypto.randomUUID();
+    const next = newBrowserId();
     setSessionId(next);
     setMessages([]);
     setError("");

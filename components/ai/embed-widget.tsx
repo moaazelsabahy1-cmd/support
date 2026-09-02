@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { newBrowserId } from "@/lib/browser-id";
 
 type WidgetConfig = {
   title: string;
@@ -42,7 +43,7 @@ export function EmbedWidget() {
   const params = useSearchParams();
   const key = params.get("key") || process.env.NEXT_PUBLIC_WIDGET_KEY || "";
   const queryParent = params.get("parent") || "";
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  const sessionId = useMemo(() => newBrowserId(), []);
   const [parent, setParent] = useState(queryParent);
   const [config, setConfig] = useState<WidgetConfig>({
     title: "Assistant",

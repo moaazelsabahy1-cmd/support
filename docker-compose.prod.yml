@@ -1,4 +1,5 @@
 # Production overlay: Postgres and Qdrant listen on loopback only.
+# `!override` replaces the base compose `ports:` so we do not also bind 0.0.0.0.
 # Usage on the VPS:
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 # Set POSTGRES_PASSWORD in the server .env (never commit it).
@@ -7,9 +8,9 @@ services:
   db:
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    ports:
+    ports: !override
       - "127.0.0.1:5433:5432"
 
   qdrant:
-    ports:
+    ports: !override
       - "127.0.0.1:6333:6333"
