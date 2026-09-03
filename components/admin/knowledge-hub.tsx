@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, Badge } from "@/components/ui/card";
 import { Input, Label, Textarea } from "@/components/ui/input";
 import { toast } from "sonner";
-import { KNOWLEDGE_CATEGORIES } from "@/lib/ai/knowledge-taxonomy";
+import { KNOWLEDGE_CATEGORIES, knowledgeReviewSourceLabel } from "@/lib/ai/knowledge-taxonomy";
 
 type Source = {
   _id: string;
@@ -26,9 +26,11 @@ type Source = {
   metadata?: {
     crawlMode?: string;
     sourceConversationId?: string;
+    sourceTicketId?: string;
     replacesSourceId?: string;
     resolvedBy?: string | null;
     handoffReason?: string | null;
+    origin?: string;
   };
 };
 
@@ -87,7 +89,6 @@ export function KnowledgeHub({ initialTab = "Overview" }: { initialTab?: (typeof
   }, []);
 
   const typeFilter = useMemo(() => {
-    if (tab === "Q&A") return "QA";
     if (tab === "Files") return "FILE";
     if (tab === "Websites") return "WEB";
     if (tab === "Review") return "CONVERSATION";
@@ -97,6 +98,7 @@ export function KnowledgeHub({ initialTab = "Overview" }: { initialTab?: (typeof
   const loadList = useCallback(async () => {
     const params = new URLSearchParams();
     params.set("pageSize", "50");
+    if (tab === "Q&A") params.set("surface", "qa");
     if (typeFilter) params.set("type", typeFilter);
     if (q) params.set("q", q);
     if (tab === "Review") params.set("status", status || "PENDING_REVIEW");
@@ -259,12 +261,12 @@ function ReviewPanel({
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
-        Conversation extracts wait here until you approve them into the same Q&amp;A index. Approving a candidate that
+        Resolved chats wait here until you approve them into the same Q&amp;A index. Approving a candidate that
         versions an older source disables the previous READY item after the new one is indexed.
       </p>
       {!items.length ? (
         <p className="rounded-xl border border-dashed p-6 text-sm text-muted-foreground">
-          No conversation extracts waiting for review.
+          No resolved chats waiting for review.
         </p>
       ) : null}
       <ul className="space-y-2">
@@ -335,12 +337,15 @@ function ReviewPanel({
                   {item.organizationId ? ` · org ${item.organizationId}` : ""}
                   {item.createdAt ? ` · ${new Date(item.createdAt).toLocaleString()}` : ""}
                 </p>
-                {item.metadata?.sourceConversationId ? (
+                {knowledgeReviewSourceLabel(item.metadata) ? (
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Conversation {item.metadata.sourceConversationId.slice(-8)}
-                    {item.metadata.resolvedBy ? ` · resolved by ${item.metadata.resolvedBy.slice(-8)}` : ""}
-                    {item.metadata.handoffReason ? ` · ${item.metadata.handoffReason}` : ""}
-                    {item.metadata.replacesSourceId ? ` · versions ${item.metadata.replacesSourceId.slice(-8)}` : ""}
+                    Source: {knowledgeReviewSourceLabel(item.metadata)}
+                    {item.metadata?.sourceConversationId
+                      ? ` · Original conversation ${item.metadata.sourceConversationId.slice(-8)}`
+                      : ""}
+                    {item.metadata?.resolvedBy ? ` · resolved by ${item.metadata.resolvedBy.slice(-8)}` : ""}
+                    {item.metadata?.handoffReason ? ` · ${item.metadata.handoffReason}` : ""}
+                    {item.metadata?.replacesSourceId ? ` · versions ${item.metadata.replacesSourceId.slice(-8)}` : ""}
                   </p>
                 ) : null}
               </div>
@@ -377,7 +382,9 @@ function SourceRow({
         <div>
           <p className="font-medium">{item.title}</p>
           <p className="text-xs text-muted-foreground">
-            {item.type}
+            {item.type === "CONVERSATION"
+              ? `Source: ${knowledgeReviewSourceLabel(item.metadata) || "Resolved Chat"}`
+              : item.type}
             {item.filename ? ` · ${item.filename}` : ""}
             {item.sourceUrl ? ` · ${item.sourceUrl}` : ""}
             {item.metadata?.crawlMode === "single_page" ? " · Single-page fallback" : ""}
@@ -385,6 +392,13 @@ function SourceRow({
             {item.indexedAt ? ` · indexed ${new Date(item.indexedAt).toLocaleString()}` : ""}
             {item.createdAt ? ` · created ${new Date(item.createdAt).toLocaleDateString()}` : ""}
           </p>
+          {item.type === "CONVERSATION" && item.metadata?.sourceConversationId ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Original conversation {item.metadata.sourceConversationId.slice(-8)}
+            </p>
+          ) : null}
+          {item.question ? <p className="mt-2 text-sm"><strong>Q:</strong> {item.question}</p> : null}
+          {item.answer ? <p className="mt-1 text-sm"><strong>A:</strong> {item.answer}</p> : null}
           {item.errorMessage ? <p className="mt-1 text-sm text-destructive">{item.errorMessage}</p> : null}
         </div>
         <Badge tone={statusTone(item.status)}>{item.status === "PROCESSING" || item.status === "PENDING" ? item.status : item.status}</Badge>

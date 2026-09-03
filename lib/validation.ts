@@ -42,6 +42,7 @@ export const ticketUpdateSchema = z.object({
   category: z.string().optional(),
   tags: z.array(z.string()).optional(),
   csat: z.number().int().min(1).max(5).optional(),
+  saveAsKnowledge: z.boolean().optional(),
 });
 
 export const commentSchema = z.object({
@@ -118,6 +119,8 @@ export const knowledgeListSchema = paginationSchema.extend({
   type: z.enum(["QA", "FILE", "WEB", "CONVERSATION"]).optional(),
   status: z.enum(["PENDING", "PENDING_REVIEW", "PROCESSING", "READY", "FAILED", "DISABLED", "REJECTED"]).optional(),
   category: z.string().optional(),
+  /** Admin Q&A tab: manual QA plus approved conversation knowledge. */
+  surface: z.enum(["qa"]).optional(),
 });
 
 export const webSourceSchema = z.object({

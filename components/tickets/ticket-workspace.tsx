@@ -9,6 +9,7 @@ import { Textarea, Input, Label } from "@/components/ui/input";
 import { getSocket } from "@/lib/socket";
 import { TICKET_PRIORITIES, TICKET_STATUSES } from "@/types";
 import { formatDate } from "@/lib/utils";
+import { ticketHasLearnableContent } from "@/lib/ai/knowledge-taxonomy";
 
 type Payload = {
   ticket: {
@@ -20,6 +21,7 @@ type Payload = {
     priority: string;
     tags: string[];
     category?: string;
+    customerId?: string;
   };
   comments: { _id: string; body: string; internal: boolean; createdAt: string; authorId: string }[];
   history: { _id: string; action: string; from?: string; to?: string; createdAt: string }[];
@@ -32,6 +34,7 @@ type Payload = {
 export function TicketWorkspace({ id, role }: { id: string; role: string }) {
   const [data, setData] = useState<Payload | null>(null);
   const [pending, start] = useTransition();
+  const [saveAsKnowledge, setSaveAsKnowledge] = useState(false);
   const staff = role !== "CUSTOMER";
 
   async function load() {
@@ -52,12 +55,20 @@ export function TicketWorkspace({ id, role }: { id: string; role: string }) {
 
   if (!data) return <p>Loading ticket…</p>;
   const t = data.ticket;
+  const canSaveKnowledge = ticketHasLearnableContent({
+    title: t.title,
+    description: t.description,
+    publicStaffComments: data.comments.filter(
+      (c) => !c.internal && Boolean(t.customerId) && c.authorId !== t.customerId,
+    ),
+  });
 
   async function mutate(patch: Record<string, unknown>) {
     start(async () => {
       try {
-        await updateTicketAction(id, patch);
-        toast.success("Ticket updated");
+        const result = (await updateTicketAction(id, patch)) as { knowledgeSaved?: boolean };
+        if (result?.knowledgeSaved) toast.success("Resolution saved for AI Knowledge review.");
+        else toast.success("Ticket updated");
         load();
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Update failed");
@@ -151,7 +162,18 @@ export function TicketWorkspace({ id, role }: { id: string; role: string }) {
           <div className="mt-4 space-y-3">
             <div>
               <Label>Status</Label>
-              <select className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-2" value={t.status} onChange={(e) => mutate({ status: e.target.value })}>
+              <select
+                className="mt-1 h-10 w-full rounded-lg border border-border bg-card px-2"
+                value={t.status}
+                onChange={(e) => {
+                  const status = e.target.value;
+                  const closing = status === "RESOLVED" || status === "CLOSED";
+                  mutate({
+                    status,
+                    ...(closing ? { saveAsKnowledge: saveAsKnowledge && canSaveKnowledge } : {}),
+                  });
+                }}
+              >
                 {TICKET_STATUSES.map((s) => <option key={s}>{s}</option>)}
               </select>
             </div>
@@ -162,7 +184,35 @@ export function TicketWorkspace({ id, role }: { id: string; role: string }) {
               </select>
             </div>
             <Button variant="outline" onClick={() => mutate({ assignedAgentId: null })}>Unassign</Button>
-            <Button onClick={() => mutate({ status: "CLOSED" })}>Close ticket</Button>
+            {canSaveKnowledge ? (
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={saveAsKnowledge}
+                  onChange={(e) => setSaveAsKnowledge(e.target.checked)}
+                />
+                <span>
+                  Save this resolution as AI Knowledge
+                  <span className="mt-1 block text-xs text-muted-foreground">
+                    Use this resolved ticket to teach the AI how to answer similar future questions.
+                  </span>
+                </span>
+              </label>
+            ) : null}
+            <Button
+              disabled={pending || t.status === "RESOLVED" || t.status === "CLOSED"}
+              onClick={() => mutate({ status: "RESOLVED", saveAsKnowledge: saveAsKnowledge && canSaveKnowledge })}
+            >
+              Resolve ticket
+            </Button>
+            <Button
+              variant="outline"
+              disabled={pending}
+              onClick={() => mutate({ status: "CLOSED", saveAsKnowledge: saveAsKnowledge && canSaveKnowledge })}
+            >
+              Close ticket
+            </Button>
           </div>
         ) : (
           <div className="mt-4 space-y-2">

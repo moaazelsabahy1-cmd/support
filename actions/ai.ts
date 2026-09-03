@@ -2,7 +2,7 @@
 
 import { prisma } from "@/lib/db";
 import { requirePermission, requireUser } from "@/lib/session";
-import { loadOrgKnowledgeSource, requireKnowledgeAdmin } from "@/lib/ai/knowledge-access";
+import { loadOrgKnowledgeSource, requireKnowledgeAdmin, knowledgeQaSurfaceWhere } from "@/lib/ai/knowledge-access";
 import { serialize } from "@/lib/serialize";
 import {
   knowledgeListSchema,
@@ -32,16 +32,20 @@ export async function listKnowledgeSourcesAction(input?: unknown) {
   const cleaned = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== "" && v != null));
   const q = knowledgeListSchema.parse(cleaned);
   const where: Prisma.KnowledgeSourceWhereInput = { organizationId: await knowledgeOrgId(user.id) };
-  if (q.type) where.type = q.type as KnowledgeSourceType;
+  if (q.surface === "qa") {
+    Object.assign(where, knowledgeQaSurfaceWhere());
+  } else if (q.type) where.type = q.type as KnowledgeSourceType;
   if (q.status) where.status = q.status as IndexStatus;
   if (q.category) where.category = q.category;
   if (q.q) {
-    where.OR = [
+    const search: Prisma.KnowledgeSourceWhereInput[] = [
       { title: { contains: q.q, mode: "insensitive" } },
       { question: { contains: q.q, mode: "insensitive" } },
       { sourceUrl: { contains: q.q, mode: "insensitive" } },
       { filename: { contains: q.q, mode: "insensitive" } },
     ];
+    const extra: Prisma.KnowledgeSourceWhereInput = { OR: search };
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), extra];
   }
   const [items, total] = await Promise.all([
     prisma.knowledgeSource.findMany({

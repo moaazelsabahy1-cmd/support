@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { readStored } from "@/lib/storage";
 import { getEnv, isConfigured } from "@/lib/env";
 import { AppError } from "@/lib/api-response";
-import { chunkDocument } from "@/lib/ai/chunking";
+import { chunkDocument, qaKnowledgeChunks } from "@/lib/ai/chunking";
 import { embedTexts, embeddingModelName } from "@/lib/ai/embeddings";
 import { extractFileBuffer } from "@/lib/ai/extract";
 import { extractWebsite } from "@/lib/ai/web";
@@ -45,23 +45,24 @@ export async function ingestSource(sourceId: string) {
   });
 
   try {
-    const { title, text } = await loadSourceText(source);
-    const chunks = chunkDocument(text);
+    const loaded = await loadSourceText(source);
+    const chunks =
+      loaded.chunks?.length ? loaded.chunks : chunkDocument(loaded.text);
     if (!chunks.length) throw new KnowledgeError(KNOWLEDGE_ERROR.NO_TEXT_FOUND, "No usable text after chunking");
     aiLog("chunk", "created chunks", { count: chunks.length, sourceId });
 
     if (!llmConfigured()) {
       throw new KnowledgeError(KNOWLEDGE_ERROR.EMBEDDING_FAILED, "OPENROUTER_API_KEY is not configured");
     }
-    const embeddings = await embedTexts(chunks.map((c) => c.text));
+    const embeddings = await embedTexts(chunks.map((c) => c.embedText || c.text));
     if (!embeddings) throw new KnowledgeError(KNOWLEDGE_ERROR.EMBEDDING_FAILED, "Embedding provider unavailable");
 
-    await persistChunks({ ...source, title }, chunks, embeddings);
+    await persistChunks({ ...source, title: loaded.title }, chunks, embeddings);
     await prisma.knowledgeSource.update({
       where: { id: sourceId },
       data: {
         status: "READY",
-        title,
+        title: loaded.title,
         chunkCount: chunks.length,
         indexedAt: new Date(),
         errorCode: null,
@@ -80,14 +81,21 @@ export async function ingestSource(sourceId: string) {
   }
 }
 
-async function loadSourceText(source: KnowledgeSource) {
+async function loadSourceText(source: KnowledgeSource): Promise<{
+  title: string;
+  text: string;
+  chunks?: { text: string; order: number; embedText?: string }[];
+}> {
   if (source.type === "QA" || source.type === "CONVERSATION") {
     const question = source.question?.trim();
     const answer = source.answer?.trim();
     if (!question || !answer) throw new KnowledgeError(KNOWLEDGE_ERROR.NO_TEXT_FOUND, "Q&A is missing question or answer");
+    const title = source.title || question;
+    const chunks = qaKnowledgeChunks({ title, question, answer });
     return {
-      title: source.title || question,
-      text: `Question: ${question}\n\nAnswer: ${answer}`,
+      title,
+      text: chunks[0]?.text || `Question: ${question}\n\nAnswer: ${answer}`,
+      chunks,
     };
   }
   if (source.type === "WEB") {
@@ -111,7 +119,7 @@ async function loadSourceText(source: KnowledgeSource) {
 
 async function persistChunks(
   source: KnowledgeSource,
-  chunks: { text: string; order: number }[],
+  chunks: { text: string; order: number; embedText?: string }[],
   embeddings: number[][],
 ) {
   const sourceId = source.id;
@@ -126,6 +134,7 @@ async function persistChunks(
 
   const meta = (source.metadata || {}) as Record<string, unknown>;
   const sourceConversationId = typeof meta.sourceConversationId === "string" ? meta.sourceConversationId : undefined;
+  const sourceTicketId = typeof meta.sourceTicketId === "string" ? meta.sourceTicketId : undefined;
   const sourceMessageIds = Array.isArray(meta.sourceMessageIds)
     ? meta.sourceMessageIds.filter((id): id is string => typeof id === "string")
     : undefined;
@@ -144,6 +153,7 @@ async function persistChunks(
         vector: embedding,
         payload: {
           sourceId,
+          knowledgeId: sourceId,
           sourceType: source.type,
           chunkId,
           title: source.title,
@@ -155,6 +165,7 @@ async function persistChunks(
           createdAt: new Date().toISOString(),
           status: "READY",
           ...(sourceConversationId ? { sourceConversationId } : {}),
+          ...(sourceTicketId ? { sourceTicketId } : {}),
           ...(sourceMessageIds?.length ? { sourceMessageIds } : {}),
           ...(handoffReason ? { handoffReason } : {}),
           ...(resolvedBy ? { resolvedBy } : {}),

@@ -8,6 +8,13 @@ export async function requireKnowledgeAdmin(): Promise<SessionUser> {
   return requireRoles(["ADMIN", "SUPER_ADMIN"]);
 }
 
+/** Admin Q&A tab: manual pairs plus approved chat/ticket Q&A. */
+export function knowledgeQaSurfaceWhere() {
+  return {
+    OR: [{ type: "QA" as const }, { type: "CONVERSATION" as const, status: "READY" as const }],
+  };
+}
+
 export function assertSameKnowledgeOrg(sourceOrganizationId: string, userOrganizationId: string) {
   if (sourceOrganizationId !== userOrganizationId) {
     throw new AppError("FORBIDDEN", "You cannot access this knowledge source", 403);

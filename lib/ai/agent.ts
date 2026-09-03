@@ -50,22 +50,6 @@ export async function answerQuestion(opts: {
   llm?: LlmProvider | "fail";
 }): Promise<AnswerQuestionResult> {
   const intent = detectIntent(opts.message);
-  if (intent === "escalate") {
-    return logAndReturn({
-      ...opts,
-      response:
-        "I can connect you with a human agent. Use Talk to a human agent to open a live conversation.",
-      sources: [],
-      retrievalScores: [],
-      escalated: true,
-      knowledgeSufficient: false,
-      handoffReason: "CUSTOMER_REQUESTED_HUMAN",
-      confidence: 0.2,
-      model: "policy",
-      fallbackUsed: false,
-    });
-  }
-
   const org = opts.organizationId || (await knowledgeOrgId(opts.userId));
   const threshold = knowledgeConfidenceThreshold();
   const retrieved = await retrieveKnowledge({ query: opts.message, filters: { organizationId: org } });
@@ -73,9 +57,25 @@ export async function answerQuestion(opts: {
   const top = chunks[0]?.score ?? 0;
   const sufficient = knowledgeIsSufficient(chunks, threshold);
 
+  if (!sufficient && intent === "escalate") {
+    return logAndReturn({
+      ...opts,
+      response:
+        "I can connect you with a human agent. Use Talk to a human agent to open a live conversation.",
+      sources: [],
+      retrievalScores: chunks.map((c) => c.score),
+      escalated: true,
+      knowledgeSufficient: false,
+      handoffReason: "CUSTOMER_REQUESTED_HUMAN",
+      confidence: 0.2,
+      model: "policy",
+      fallbackUsed: retrieved.fallbackUsed,
+    });
+  }
+
   if (!sufficient) {
     const handoffReason = handoffReasonForHits(chunks, threshold);
-    aiLog("ai", "no confident knowledge", { handoffReason, top });
+    aiLog("ai", "no confident knowledge", { handoffReason, top, sourceId: chunks[0]?.sourceId });
     return logAndReturn({
       ...opts,
       response: NO_KNOWLEDGE,

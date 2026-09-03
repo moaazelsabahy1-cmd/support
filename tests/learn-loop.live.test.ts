@@ -142,6 +142,7 @@ describe("learn loop e2e", () => {
     expect(candidate!.status).toBe("PENDING_REVIEW");
     const meta = (candidate!.metadata || {}) as Record<string, unknown>;
     expect(meta.sourceConversationId).toBe(handoff.conversationId);
+    expect(meta.origin).toBe("RESOLVED_CHAT");
     expect(meta.resolvedBy).toBe(agentId);
     expect(candidate!.question).toBeTruthy();
     expect(candidate!.answer).toBeTruthy();
@@ -156,6 +157,7 @@ describe("learn loop e2e", () => {
     await approveKnowledgeSource(learnedId, { wait: true });
     const ready = await prisma.knowledgeSource.findUnique({ where: { id: learnedId } });
     expect(ready?.status).toBe("READY");
+    expect(ready?.type).toBe("CONVERSATION");
     matrix.push({
       step: "5 Admin approval works",
       result: "PASS",
@@ -187,12 +189,14 @@ describe("learn loop e2e", () => {
     const payloadA = hitA!.payload as {
       organizationId?: string;
       sourceId?: string;
+      knowledgeId?: string;
       sourceConversationId?: string;
       resolvedBy?: string;
       status?: string;
     };
     expect(String(payloadA.organizationId)).toBe(DEFAULT_ORGANIZATION_ID);
     expect(String(payloadA.sourceId)).toBe(learnedId);
+    expect(String(payloadA.knowledgeId)).toBe(learnedId);
     expect(payloadA.sourceConversationId).toBe(handoff.conversationId);
     expect(payloadA.resolvedBy).toBe(agentId);
     expect(payloadA.status).toBe("READY");
@@ -328,6 +332,62 @@ describe("learn loop e2e", () => {
     });
     expect(await extractConversationKnowledge(closedNoHuman.id)).toBeNull();
   }, 30_000);
+
+  it("strips email and tokens from chat-learned Q&A before ingest", async () => {
+    const conv = await prisma.conversation.create({
+      data: {
+        id: newId(),
+        customerId,
+        organizationId: DEFAULT_ORGANIZATION_ID,
+        status: "CLOSED",
+        agentId,
+      },
+    });
+    await prisma.message.createMany({
+      data: [
+        {
+          id: newId(),
+          conversationId: conv.id,
+          senderId: customerId,
+          body: "How do I reset my widget password? Email me at leak-chat@example.com",
+          attachmentIds: [],
+          readBy: [customerId],
+          role: "CUSTOMER",
+        },
+        {
+          id: newId(),
+          conversationId: conv.id,
+          senderId: agentId,
+          body: "Open Settings → Security → Reset Password, then follow the email. Never share token sk-or-abcdefghijklmnop or +1-555-010-9999.",
+          attachmentIds: [],
+          readBy: [agentId],
+          role: "HUMAN",
+        },
+      ],
+    });
+    const candidate = await extractConversationKnowledge(conv.id);
+    expect(candidate).toBeTruthy();
+    const blob = `${candidate!.question}\n${candidate!.answer}\n${candidate!.title}`;
+    expect(blob).not.toMatch(/leak-chat@example.com/i);
+    expect(blob).not.toMatch(/sk-or-abcdefghijklmnop/i);
+    expect(blob).not.toMatch(/555-010-9999/);
+    if (candidate) {
+      await approveKnowledgeSource(candidate.id, { wait: true });
+      const chunks = await prisma.knowledgeChunk.findMany({ where: { sourceId: candidate.id } });
+      const indexed = chunks.map((c) => c.text).join("\n");
+      expect(indexed).not.toMatch(/leak-chat@example.com/i);
+      expect(indexed).not.toMatch(/sk-or-abcdefghijklmnop/i);
+      const vector = await embedText("How do I reset my widget password?");
+      const points = vector ? await searchQdrant(vector, 8, { organizationId: DEFAULT_ORGANIZATION_ID }) : [];
+      const hit = (points || []).find((p) => String((p.payload as { sourceId?: string })?.sourceId) === candidate.id);
+      if (hit) {
+        const text = String((hit.payload as { text?: string }).text || "");
+        expect(text).not.toMatch(/leak-chat@example.com/i);
+        expect(text).not.toMatch(/sk-or-abcdefghijklmnop/i);
+      }
+      await deleteKnowledgeSource(candidate.id);
+    }
+  }, 300_000);
 
   it("does not retrieve REJECTED conversation knowledge", async () => {
     const rejectedId = newId();

@@ -1,7 +1,7 @@
-import { chunkDocument, chunkText } from "@/lib/ai/chunking";
+import { chunkDocument, chunkText, qaKnowledgeChunks, qaIntentAliases } from "@/lib/ai/chunking";
 import { ingestSource } from "@/lib/ai/ingest";
 
-export { chunkText, chunkDocument };
+export { chunkText, chunkDocument, qaKnowledgeChunks, qaIntentAliases };
 
 /** Seed/helper: index an existing knowledge source by id. */
 export async function indexChunks(opts: {

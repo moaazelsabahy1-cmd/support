@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chunkDocument } from "../lib/ai/chunking";
+import { chunkDocument, qaKnowledgeChunks, qaIntentAliases } from "../lib/ai/chunking";
 import { extractFileBuffer, extractMarkdown, extractPlainText } from "../lib/ai/extract";
 import { KnowledgeError, KNOWLEDGE_ERROR } from "../lib/ai/errors";
 import { assertSafeHttpUrl, isPrivateIp } from "../lib/ai/ssrf";
@@ -8,14 +8,14 @@ import { applyMinScore, dedupeHits, rankHits, type RetrievedHit } from "../lib/a
 import { groundedPrompt, publicSourceLabel, detectIntent } from "../lib/ai/prompts";
 import { qdrantPointId } from "../lib/ai/qdrant";
 import { hasPermission } from "../lib/permissions";
-import { trainingPairSchema, webSourceSchema } from "../lib/validation";
+import { assertSameKnowledgeOrg, knowledgeQaSurfaceWhere } from "../lib/ai/knowledge-access";
+import { trainingPairSchema, webSourceSchema, knowledgeListSchema } from "../lib/validation";
 import { AppError } from "../lib/api-response";
-import { assertSameKnowledgeOrg } from "../lib/ai/knowledge-access";
 import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
 import { knowledgeIsSufficient } from "../lib/ai/agent";
 import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
 import { DEFAULT_ANSWER_CONFIDENCE_THRESHOLD } from "../lib/env";
-import { clampKnowledgeCategory, normalizeKnowledgeTags } from "../lib/ai/knowledge-taxonomy";
+import { clampKnowledgeCategory, normalizeKnowledgeTags, ticketHasLearnableContent, knowledgeReviewSourceLabel, isTrivialSupportText } from "../lib/ai/knowledge-taxonomy";
 
 const hit = (over: Partial<RetrievedHit>): RetrievedHit => ({
   sourceId: "a",
@@ -40,6 +40,57 @@ describe("chunking", () => {
   it("does not create tiny fragments", () => {
     const chunks = chunkDocument("Hi", 1000, 100);
     expect(chunks.length).toBe(0);
+  });
+
+  it("embeds Q&A on the question and title separately while keeping the answer in payload text", () => {
+    const chunks = qaKnowledgeChunks({
+      title: "Reset password",
+      question: "How do I reset my password?",
+      answer: "Open the login page, click Forgot Password, then follow the email instructions.",
+    });
+    expect(chunks[0].embedText).toBe("How do I reset my password?");
+    expect(chunks.some((c) => c.embedText === "Reset password")).toBe(true);
+    expect(chunks.every((c) => !c.embedText?.includes("Forgot Password"))).toBe(true);
+    expect(chunks[0].text).toContain("Question:");
+    expect(chunks[0].text).toContain("Forgot Password");
+    expect(chunks.every((c) => c.text === chunks[0].text)).toBe(true);
+  });
+
+  it("adds capped create/submit aliases without embedding the answer", () => {
+    const aliases = qaIntentAliases("How do I create a ticket?", "How to Create a Support Ticket");
+    expect(aliases.length).toBeGreaterThan(0);
+    expect(aliases.length).toBeLessThanOrEqual(4);
+    expect(aliases.some((a) => /submit/i.test(a) && /support request|ticket/i.test(a))).toBe(true);
+    expect(qaIntentAliases("How do I create a ticket?").some((a) => /where can i submit a new support request/i.test(a))).toBe(
+      true,
+    );
+    const chunks = qaKnowledgeChunks({
+      title: "How to Create a Support Ticket",
+      question: "How do I create a support ticket?",
+      answer: "Open Support and click Create Ticket. Then click Submit Ticket.",
+    });
+    expect(chunks[0].embedText).toBe("How do I create a support ticket?");
+    expect(chunks.some((c) => c.embedText === "How to Create a Support Ticket")).toBe(true);
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.length).toBeLessThanOrEqual(6);
+    expect(chunks.every((c) => !c.embedText?.includes("Submit Ticket"))).toBe(true);
+    expect(chunks.every((c) => c.text.includes("Submit Ticket"))).toBe(true);
+  });
+
+  it("adds human/agent contact aliases for the same Q&A payload", () => {
+    const aliases = qaIntentAliases("How can I connect with an agent?");
+    expect(aliases.length).toBeGreaterThan(0);
+    expect(aliases.length).toBeLessThanOrEqual(4);
+    expect(aliases.some((a) => /talk to a human/i.test(a))).toBe(true);
+    expect(aliases.some((a) => /contact an agent|reach support|customer service/i.test(a))).toBe(true);
+    const chunks = qaKnowledgeChunks({
+      question: "How can I connect with an agent?",
+      answer: 'Open the chat and select "Talk to an Agent".',
+    });
+    expect(chunks[0].embedText).toBe("How can I connect with an agent?");
+    expect(chunks.every((c) => !c.embedText?.includes("Talk to an Agent"))).toBe(true);
+    expect(chunks.every((c) => c.text.includes("Talk to an Agent"))).toBe(true);
+    expect(chunks.some((c) => /talk to a human/i.test(c.embedText || ""))).toBe(true);
   });
 });
 
@@ -220,6 +271,40 @@ describe("knowledge taxonomy", () => {
       "conversation-learn",
     ]);
   });
+
+  it("rejects trivial ticket threads and requires a staff solution", () => {
+    expect(isTrivialSupportText("Thanks")).toBe(true);
+    expect(isTrivialSupportText("please call me")).toBe(true);
+    expect(
+      ticketHasLearnableContent({
+        title: "Hello",
+        description: "Thanks",
+        publicStaffComments: [{ body: "You are welcome." }],
+      }),
+    ).toBe(false);
+    expect(
+      ticketHasLearnableContent({
+        title: "How do I configure feature X?",
+        description: "I cannot find the setting.",
+        publicStaffComments: [{ body: "Open Settings → Features → X → Enable → Save." }],
+      }),
+    ).toBe(true);
+    expect(
+      ticketHasLearnableContent({
+        title: "How do I configure feature X?",
+        description: "I cannot find the setting.",
+        publicStaffComments: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("labels resolved-ticket knowledge without exposing conversation fallback", () => {
+    expect(knowledgeReviewSourceLabel({ sourceTicketId: "ticketabcdefghijkl" })).toBe("Resolved Ticket efghijkl");
+    expect(knowledgeReviewSourceLabel({ sourceConversationId: "convabcdefghijkl" })).toBe("Resolved Chat efghijkl");
+    expect(knowledgeReviewSourceLabel({ origin: "RESOLVED_CHAT", sourceConversationId: "convabcdefghijkl" })).toBe(
+      "Resolved Chat efghijkl",
+    );
+  });
 });
 
 describe("learned knowledge sanitization", () => {
@@ -248,5 +333,12 @@ describe("knowledge tenant access", () => {
       expect((error as AppError).status).toBe(403);
       expect((error as AppError).code).toBe("FORBIDDEN");
     }
+  });
+
+  it("Q&A surface includes ready conversation knowledge", () => {
+    expect(knowledgeListSchema.parse({ surface: "qa" }).surface).toBe("qa");
+    expect(knowledgeQaSurfaceWhere()).toEqual({
+      OR: [{ type: "QA" }, { type: "CONVERSATION", status: "READY" }],
+    });
   });
 });

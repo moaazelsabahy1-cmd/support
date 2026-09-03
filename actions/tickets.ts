@@ -9,7 +9,7 @@ import { requirePermission, requireUser } from "@/lib/session";
 import { serialize } from "@/lib/serialize";
 import { emitToTicket } from "@/lib/socket-server";
 import { appUrl } from "@/lib/utils";
-import { extractConversationKnowledge } from "@/lib/ai/learn";
+import { extractTicketKnowledge } from "@/lib/ai/learn";
 import { newId } from "@/lib/id";
 import type { Prisma, TicketPriority, TicketStatus } from "@prisma/client";
 
@@ -165,6 +165,7 @@ export async function updateTicketAction(id: string, input: unknown) {
   if (user.role === "CUSTOMER") {
     delete data.assignedAgentId;
     delete data.status;
+    delete data.saveAsKnowledge;
   }
   const set: Prisma.TicketUpdateInput = {};
   if (data.title) set.title = data.title;
@@ -211,6 +212,8 @@ export async function updateTicketAction(id: string, input: unknown) {
   if (data.csat) set.csat = data.csat;
   const updated = await prisma.ticket.update({ where: { id: ticket.id }, data: set });
   emitToTicket(id, "ticket:updated", serialize(updated));
+  let knowledgeSaved = false;
+  let knowledgeId: string | null = null;
   if (data.status === "RESOLVED" || data.status === "CLOSED") {
     const linked = await prisma.conversation.findMany({ where: { ticketId: ticket.id }, select: { id: true, status: true } });
     for (const c of linked) {
@@ -220,7 +223,11 @@ export async function updateTicketAction(id: string, input: unknown) {
           data: { status: "CLOSED", aiPaused: false },
         });
       }
-      await extractConversationKnowledge(c.id);
+    }
+    if (data.saveAsKnowledge) {
+      const source = await extractTicketKnowledge(ticket.id, { createdBy: user.id });
+      knowledgeSaved = Boolean(source);
+      knowledgeId = source?.id ?? null;
     }
   }
   if (data.status === "RESOLVED") {
@@ -241,7 +248,7 @@ export async function updateTicketAction(id: string, input: unknown) {
       });
     }
   }
-  return serialize(updated);
+  return { ...serialize(updated), knowledgeSaved, knowledgeId };
 }
 
 export async function addCommentAction(ticketId: string, input: unknown) {
