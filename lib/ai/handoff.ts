@@ -1,9 +1,11 @@
 import { prisma } from "@/lib/db";
-import { notifyAgents, notifyUser } from "@/lib/notifications";
+import { notifyUser } from "@/lib/notifications";
 import { emitToConversation } from "@/lib/socket-server";
 import { serialize } from "@/lib/serialize";
 import { SYSTEM_AI_USER_ID } from "@/types";
 import { newId } from "@/lib/id";
+import { resolveHandoffStartAgent, startSequentialHandoff } from "@/lib/ai/handoff-queue";
+import { assertHumanSupportOpen } from "@/lib/ai/human-support-hours";
 import type { AiHandoffReason, PublicSourceRef } from "@/types";
 
 export function shouldSkipHandoff(conv: {
@@ -23,7 +25,13 @@ export async function persistAiHandoff(opts: {
   aiResponse?: string;
   sources?: PublicSourceRef[];
   turnKey: string;
+  startAgentId?: string | null;
+  at?: Date;
 }) {
+  if (opts.startAgentId) {
+    const conv = await prisma.conversation.findUniqueOrThrow({ where: { id: opts.conversationId } });
+    await resolveHandoffStartAgent(conv.organizationId, opts.startAgentId);
+  }
   const existing = await prisma.message.findFirst({
     where: { conversationId: opts.conversationId, aiTurnKey: opts.turnKey },
   });
@@ -36,6 +44,8 @@ export async function persistAiHandoff(opts: {
   if (shouldSkipHandoff({ ...convNow, hasSystemHandoff: Boolean(existingHandoff) })) {
     return convNow;
   }
+
+  assertHumanSupportOpen(opts.at);
 
   const now = new Date();
   const claimed = await prisma.conversation.updateMany({
@@ -99,12 +109,13 @@ export async function persistAiHandoff(opts: {
     href: `/chat/${opts.conversationId}`,
     type: "ai.escalation",
   });
-  await notifyAgents({
-    title: "AI handoff waiting",
-    body: opts.lastQuestion.slice(0, 140),
-    href: `/chat/${opts.conversationId}`,
-    type: "ai.handoff",
-    excludeUserId: opts.userId,
+  const conv = await prisma.conversation.findUniqueOrThrow({ where: { id: opts.conversationId } });
+  await startSequentialHandoff({
+    conversationId: conv.id,
+    customerId: conv.customerId,
+    organizationId: conv.organizationId,
+    reason: opts.reason,
+    startAgentId: opts.startAgentId,
   });
-  return prisma.conversation.findUniqueOrThrow({ where: { id: opts.conversationId } });
+  return conv;
 }

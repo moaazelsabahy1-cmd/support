@@ -65,7 +65,7 @@ test.describe("knowledge system", () => {
       await expect(page.getByText(/unavailable|OPENROUTER_API_KEY|human/i).first()).toBeVisible({ timeout: 15_000 });
     }
 
-    const escalate = page.getByRole("button", { name: "Talk to a human agent" });
+    const escalate = page.getByRole("button", { name: /Talk to Human/i });
     if (await escalate.isVisible()) {
       await escalate.click();
       await expect(page.getByText(/human agent/i).first()).toBeVisible();

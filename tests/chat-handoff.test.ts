@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { chatMessageLabel, shouldAppendChatMessage } from "../lib/chat-message-label";
 import { shouldSkipHandoff } from "../lib/ai/handoff";
+import { canAccessConversation } from "../lib/chat/conversation-access";
 
 describe("chatMessageLabel", () => {
   const customerId = "cust-1";
@@ -59,5 +60,27 @@ describe("shouldAppendChatMessage", () => {
     expect(shouldAppendChatMessage(existing, { _id: "m1", conversationId: active }, active)).toBe(false);
     expect(shouldAppendChatMessage(existing, { _id: "m2", conversationId: active }, active)).toBe(true);
     expect(shouldAppendChatMessage(existing, { id: "m3", conversationId: active }, active)).toBe(true);
+  });
+});
+
+describe("canAccessConversation", () => {
+  const conv = {
+    customerId: "cust-1",
+    agentId: null as string | null,
+    humanHandoff: { currentAgentId: "agent-2", status: "OFFERED" },
+  };
+
+  it("lets only the offered agent see an OFFERED handoff", () => {
+    expect(canAccessConversation({ id: "agent-2", role: "AGENT" }, conv)).toBe(true);
+    expect(canAccessConversation({ id: "agent-1", role: "AGENT" }, conv)).toBe(false);
+    expect(canAccessConversation({ id: "cust-1", role: "CUSTOMER" }, conv)).toBe(true);
+    expect(canAccessConversation({ id: "cust-2", role: "CUSTOMER" }, conv)).toBe(false);
+  });
+
+  it("lets the assigned agent after accept, and admins", () => {
+    const accepted = { customerId: "cust-1", agentId: "agent-2", humanHandoff: { currentAgentId: "agent-2", status: "ACCEPTED" } };
+    expect(canAccessConversation({ id: "agent-2", role: "AGENT" }, accepted)).toBe(true);
+    expect(canAccessConversation({ id: "agent-1", role: "AGENT" }, accepted)).toBe(false);
+    expect(canAccessConversation({ id: "admin-1", role: "ADMIN" }, accepted)).toBe(true);
   });
 });

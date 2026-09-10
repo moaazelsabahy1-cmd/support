@@ -2,9 +2,6 @@ import { NextRequest } from "next/server";
 import { jsonFail, jsonOk, toErrorResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { answerQuestion } from "@/lib/ai/agent";
-import { prisma } from "@/lib/db";
-import { createPublicTicket } from "@/lib/public-tickets";
-import { newId } from "@/lib/id";
 import {
   authorizeWidgetSite,
   corsHeadersForOrigin,
@@ -13,6 +10,15 @@ import {
   widgetRequestKey,
   type ResolvedWidgetSite,
 } from "@/lib/ai/widget-site";
+import { widgetGuestEmail } from "@/lib/ai/widget-guest";
+import { prisma } from "@/lib/db";
+import { listPublicHandoffAgents } from "@/lib/ai/handoff-queue";
+import { humanSupportHoursState } from "@/lib/ai/human-support-hours";
+import {
+  escalateWidgetToHuman,
+  listWidgetConversation,
+  sendWidgetConversationMessage,
+} from "@/lib/ai/widget-handoff";
 
 function withCors(res: Response, origin: string | null, allowed: boolean) {
   const headers = corsHeadersForOrigin(origin, allowed);
@@ -43,8 +49,8 @@ export async function OPTIONS(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const origin = req.headers.get("origin");
   try {
-    const origin = req.headers.get("origin");
     const siteOrRes = await requireWidget(req);
     if (siteOrRes instanceof Response) return siteOrRes;
     const site = siteOrRes;
@@ -54,58 +60,70 @@ export async function POST(req: NextRequest) {
     }
     const body = await req.json();
     const sessionId = body.sessionId || crypto.randomUUID();
-    if (body.escalate) {
-      const logs = await prisma.aiChatLog.findMany({
-        where: { sessionId },
-        orderBy: { createdAt: "desc" },
-        take: 6,
-      });
-      const latest = logs[0];
-      const context = logs
-        .slice()
-        .reverse()
-        .map((l) => `Q: ${l.question || l.message}\nA: ${l.answer || l.response}`)
-        .join("\n\n");
-      let ticketNumber: string | undefined;
-      try {
-        const ticket = await createPublicTicket({
-          name: body.name || "Widget visitor",
-          email: body.email || "widget@unknown.local",
-          title: "Widget AI escalation",
-          description: [
-            latest ? `Last question: ${latest.question || latest.message}` : "Customer requested a human from the widget.",
-            latest ? `AI response: ${latest.answer || latest.response}` : "",
-            context,
-          ]
-            .filter(Boolean)
-            .join("\n\n"),
-          category: "General",
-        });
-        ticketNumber = ticket.number;
-      } catch {
-        /* still record contact submission */
-      }
-      await prisma.contactSubmission.create({
-        data: {
-          id: newId(),
-          name: body.name || "Widget visitor",
-          email: body.email || "widget@unknown.local",
-          message: `Human escalation for session ${sessionId}`,
-          sessionId,
-          ticketNumber,
-          aiContext: context.slice(0, 8000),
-        },
-      });
-      await prisma.aiChatLog.updateMany({ where: { sessionId }, data: { escalated: true } });
-      return withCors(jsonOk({ sessionId, human: true, ticketNumber }), origin, true);
+
+    if (body.listAgents) {
+      return withCors(
+        jsonOk({
+          agents: await listPublicHandoffAgents(site.organizationId),
+          ...humanSupportHoursState(),
+        }),
+        origin,
+        true,
+      );
     }
+
+    if (body.listMessages) {
+      const data = await listWidgetConversation({
+        widgetToken: String(body.widgetToken || ""),
+        sessionId,
+      });
+      return withCors(jsonOk(data), origin, true);
+    }
+
+    if (body.escalate) {
+      if (!rateLimit(`widget-escalate:${site.id}:${ip}`, 8, 60_000).ok) {
+        return withCors(jsonFail("RATE_LIMIT", "Too many handoff requests", 429), origin, true);
+      }
+      const data = await escalateWidgetToHuman({
+        site,
+        sessionId,
+        name: body.name,
+        selectedAgentId: body.selectedAgentId,
+      });
+      return withCors(jsonOk(data), origin, true);
+    }
+
+    if (body.send || (body.widgetToken && body.conversationId && body.message)) {
+      const data = await sendWidgetConversationMessage({
+        widgetToken: String(body.widgetToken || ""),
+        sessionId,
+        body: String(body.message || body.body || ""),
+      });
+      return withCors(jsonOk(data), origin, true);
+    }
+
     const message = String(body.message || "").trim();
     if (!message) return withCors(jsonFail("VALIDATION", "Enter a question to send.", 400), origin, true);
+
+    const existingGuest = await prisma.user.findUnique({ where: { email: widgetGuestEmail(sessionId) } });
+    if (existingGuest) {
+      const paused = await prisma.conversation.findFirst({
+        where: { customerId: existingGuest.id, sourceSessionId: sessionId, aiPaused: true },
+      });
+      if (paused) {
+        return withCors(
+          jsonFail("HANDOFF_ACTIVE", "An agent is handling this conversation. Send your message in the live chat.", 409),
+          origin,
+          true,
+        );
+      }
+    }
+
     const result = await answerQuestion({
       ...widgetAnswerInput(site, message, sessionId),
     });
     return withCors(jsonOk({ ...result, sessionId }), origin, true);
   } catch (e) {
-    return toErrorResponse(e);
+    return withCors(toErrorResponse(e), origin, true);
   }
 }

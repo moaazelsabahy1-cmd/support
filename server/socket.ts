@@ -2,12 +2,22 @@ import { Server as IOServer, type Socket } from "socket.io";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { setIO } from "@/lib/socket-server";
+import { canAccessConversation } from "@/lib/chat/conversation-access";
 import type { Role } from "@/types";
 
 export function attachSocket(io: IOServer) {
   setIO(io);
   io.use(async (socket, next) => {
     try {
+      const widgetToken = String(socket.handshake.auth?.widgetToken || "");
+      if (widgetToken) {
+        const { verifyWidgetToken } = await import("@/lib/ai/widget-guest");
+        const claims = verifyWidgetToken(widgetToken);
+        if (!claims) return next(new Error("UNAUTHENTICATED"));
+        socket.data.user = { id: claims.userId, role: "CUSTOMER" as Role };
+        socket.data.widgetConversationId = claims.conversationId;
+        return next();
+      }
       const cookie = socket.handshake.headers.cookie || "";
       const session = await auth.api.getSession({
         headers: new Headers({ cookie }),
@@ -27,17 +37,18 @@ export function attachSocket(io: IOServer) {
 
   io.on("connection", (socket) => {
     const user = socket.data.user as { id: string; role: Role };
+    const widgetConversationId = socket.data.widgetConversationId as string | undefined;
     socket.join(`user:${user.id}`);
     io.emit("agent:status", { userId: user.id, online: true });
 
     socket.on("join", async (payload: { conversationId?: string; ticketId?: string }) => {
       try {
         if (payload.conversationId) {
-          if (await canJoinConversation(user, payload.conversationId)) {
+          if (await canJoinConversation(user, payload.conversationId, widgetConversationId)) {
             socket.join(`conversation:${payload.conversationId}`);
           }
         }
-        if (payload.ticketId) {
+        if (payload.ticketId && !widgetConversationId) {
           if (await canJoinTicket(user, payload.ticketId)) {
             socket.join(`ticket:${payload.ticketId}`);
           }
@@ -67,6 +78,7 @@ export function attachSocket(io: IOServer) {
     });
 
     socket.on("message:read", async (payload: { conversationId: string }) => {
+      if (!(await canJoinConversation(user, payload.conversationId, widgetConversationId))) return;
       const messages = await prisma.message.findMany({ where: { conversationId: payload.conversationId } });
       await Promise.all(
         messages.map((m) =>
@@ -90,11 +102,18 @@ export function attachSocket(io: IOServer) {
   });
 }
 
-async function canJoinConversation(user: { id: string; role: Role }, id: string) {
-  const conv = await prisma.conversation.findUnique({ where: { id } });
+async function canJoinConversation(
+  user: { id: string; role: Role },
+  id: string,
+  widgetConversationId?: string,
+) {
+  if (widgetConversationId && widgetConversationId !== id) return false;
+  const conv = await prisma.conversation.findUnique({
+    where: { id },
+    include: { humanHandoff: true },
+  });
   if (!conv) return false;
-  if (["ADMIN", "SUPER_ADMIN", "AGENT"].includes(user.role)) return true;
-  return conv.customerId === user.id || conv.agentId === user.id;
+  return canAccessConversation(user, conv);
 }
 
 async function canJoinTicket(user: { id: string; role: Role }, id: string) {

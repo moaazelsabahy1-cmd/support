@@ -3,15 +3,26 @@
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/session";
 import { serialize } from "@/lib/serialize";
-import { emitToConversation } from "@/lib/socket-server";
-import { notifyUser } from "@/lib/notifications";
 import { persistAiHandoff } from "@/lib/ai/handoff";
+import { acceptHandoff, declineHandoff, listPublicHandoffAgents, resolveHandoffStartAgent } from "@/lib/ai/handoff-queue";
+import { assertHumanSupportOpen, humanSupportHoursState } from "@/lib/ai/human-support-hours";
 import { findOrCreateCustomerConversation } from "@/lib/ai/conversation";
 import { extractConversationKnowledge } from "@/lib/ai/learn";
 import { knowledgeOrgId } from "@/lib/ai/org";
+import { assertCanAccessConversation } from "@/lib/chat/conversation-access";
+import { sendConversationMessage } from "@/lib/chat/conversation-message";
 import { AppError } from "@/lib/api-response";
 import { newId } from "@/lib/id";
 import type { Prisma } from "@prisma/client";
+
+export async function listHandoffAgentCardsAction() {
+  const user = await requireUser();
+  const organizationId = await knowledgeOrgId(user.id);
+  return {
+    agents: await listPublicHandoffAgents(organizationId),
+    ...humanSupportHoursState(),
+  };
+}
 
 export async function listConversationsAction() {
   const user = await requireUser();
@@ -22,8 +33,7 @@ export async function listConversationsAction() {
         ? {
             OR: [
               { agentId: user.id },
-              { AND: [{ agentId: null }, { status: "OPEN" }] },
-              { AND: [{ aiPaused: true }, { status: "OPEN" }] },
+              { humanHandoff: { is: { currentAgentId: user.id, status: { in: ["OFFERED", "ACCEPTED"] } } } },
             ],
           }
         : {};
@@ -33,6 +43,7 @@ export async function listConversationsAction() {
     take: 50,
     include: {
       customer: { select: { id: true, name: true, email: true } },
+      humanHandoff: { include: { attempts: { orderBy: { order: "asc" as const } } } },
       messages: {
         where: { role: "CUSTOMER", internal: false },
         orderBy: { createdAt: "desc" },
@@ -70,11 +81,12 @@ export async function getOrCreateConversationAction(customerId?: string) {
 
 export async function listMessagesAction(conversationId: string) {
   const user = await requireUser();
-  const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { humanHandoff: true },
+  });
   if (!conv) throw new AppError("NOT_FOUND", "Conversation not found", 404);
-  if (user.role === "CUSTOMER" && conv.customerId !== user.id) {
-    throw new AppError("FORBIDDEN", "Not your conversation", 403);
-  }
+  assertCanAccessConversation(user, conv);
   const items = await prisma.message.findMany({
     where: {
       conversationId: conv.id,
@@ -87,52 +99,18 @@ export async function listMessagesAction(conversationId: string) {
 
 export async function sendMessageAction(conversationId: string, body: string, attachmentIds: string[] = []) {
   const user = await requireUser();
-  if (!body.trim() && attachmentIds.length === 0) {
-    throw new AppError("BAD_REQUEST", "Message cannot be empty", 400);
-  }
-  const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
-  if (!conv) throw new AppError("NOT_FOUND", "Conversation not found", 404);
-  const now = new Date();
-  const role = user.role === "CUSTOMER" ? "CUSTOMER" : "HUMAN";
-  const message = await prisma.message.create({
-    data: {
-      id: newId(),
-      conversationId: conv.id,
-      senderId: user.id,
-      body,
-      attachmentIds,
-      readBy: [user.id],
-      role,
-    },
-  });
-  await prisma.conversation.update({
-    where: { id: conv.id },
-    data: {
-      updatedAt: now,
-      lastMessageAt: now,
-      agentId: user.role === "AGENT" || user.role === "ADMIN" || user.role === "SUPER_ADMIN" ? user.id : conv.agentId,
-    },
-  });
-  const payload = serialize(message);
-  emitToConversation(conversationId, "message:new", payload);
-  const other = user.role === "CUSTOMER" ? conv.agentId : conv.customerId;
-  if (other) {
-    await notifyUser({
-      userId: other,
-      title: "New message",
-      body: body.slice(0, 100) || "Attachment",
-      href: `/chat/${conversationId}`,
-      type: "message.new",
-    });
-  }
-  return payload;
+  return sendConversationMessage({ user, conversationId, body, attachmentIds });
 }
 
 export async function closeConversationAction(conversationId: string) {
   const user = await requireUser();
   if (user.role === "CUSTOMER") throw new AppError("FORBIDDEN", "Agents close conversations", 403);
-  const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
+  const conv = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { humanHandoff: true },
+  });
   if (!conv) throw new AppError("NOT_FOUND", "Conversation not found", 404);
+  assertCanAccessConversation(user, conv);
   const updated = await prisma.conversation.update({
     where: { id: conv.id },
     data: {
@@ -144,21 +122,35 @@ export async function closeConversationAction(conversationId: string) {
           : conv.agentId,
     },
   });
+  await prisma.humanHandoff.updateMany({
+    where: { conversationId: conv.id, status: { in: ["OFFERED", "ACCEPTED"] } },
+    data: { status: "COMPLETED", completedAt: new Date() },
+  });
   await extractConversationKnowledge(conv.id);
   return serialize(updated);
 }
 
-export async function escalateAiToHumanAction(sessionId: string) {
+export async function escalateAiToHumanAction(sessionId: string, selectedAgentId?: string) {
   const user = await requireUser();
+  if (!selectedAgentId) {
+    throw new AppError("VALIDATION", "Choose a support agent before sending a request.", 400);
+  }
   const organizationId = await knowledgeOrgId(user.id);
+  await resolveHandoffStartAgent(organizationId, selectedAgentId);
   const conv = await findOrCreateCustomerConversation({
     customerId: user.id,
     organizationId,
     sessionId,
   });
   if (conv.aiPaused) {
-    return serialize(conv);
+    return serialize(
+      await prisma.conversation.findUniqueOrThrow({
+        where: { id: conv.id },
+        include: { humanHandoff: { include: { attempts: { orderBy: { order: "asc" } } } } },
+      }),
+    );
   }
+  assertHumanSupportOpen();
   const logs = await prisma.aiChatLog.findMany({
     where: { sessionId },
     orderBy: { createdAt: "desc" },
@@ -175,6 +167,24 @@ export async function escalateAiToHumanAction(sessionId: string) {
     aiResponse: latest ? String(latest.answer || latest.response || "") : undefined,
     sources: logSources.map((s) => ({ title: String(s.title || "Source"), type: "QA" })),
     turnKey: `handoff:manual:${sessionId}`,
+    startAgentId: selectedAgentId,
   });
-  return serialize(await prisma.conversation.findUniqueOrThrow({ where: { id: conv.id } }));
+  return serialize(
+    await prisma.conversation.findUniqueOrThrow({
+      where: { id: conv.id },
+      include: { humanHandoff: { include: { attempts: { orderBy: { order: "asc" } } } } },
+    }),
+  );
+}
+
+export async function acceptHandoffAction(handoffId: string) {
+  const user = await requireUser();
+  if (user.role === "CUSTOMER") throw new AppError("FORBIDDEN", "Agents accept handoffs", 403);
+  return serialize(await acceptHandoff(handoffId, user.id));
+}
+
+export async function declineHandoffAction(handoffId: string) {
+  const user = await requireUser();
+  if (user.role === "CUSTOMER") throw new AppError("FORBIDDEN", "Agents decline handoffs", 403);
+  return serialize(await declineHandoff(handoffId, user.id));
 }

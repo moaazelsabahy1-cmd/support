@@ -12,6 +12,7 @@ import { SiteFooter } from "@/components/marketing/site-footer";
 import { FaqSection } from "@/components/marketing/faq-section";
 import { AiWidget } from "@/components/marketing/ai-widget";
 import { OpenAssistantButton } from "@/components/marketing/open-assistant-button";
+import { OpenHumanHandoffButton } from "@/components/marketing/open-human-handoff-button";
 import { LandingNav } from "@/components/marketing/landing-nav";
 import { SelfService } from "@/components/marketing/self-service";
 import { RevealRoot } from "@/components/marketing/reveal";
@@ -32,13 +33,15 @@ export default function HomePage() {
             mockup.
           </p>
           <div className="landing-hero-item landing-hero-item-4 mt-8 flex flex-wrap gap-3">
-            <Button asChild size="lg" className="landing-btn-motion">
-              <Link href="/support/new">Create Ticket</Link>
-            </Button>
+            <OpenAssistantButton size="lg" className="landing-btn-motion">
+              Ask AI
+            </OpenAssistantButton>
             <Button asChild size="lg" variant="outline" className="landing-btn-motion">
-              <Link href="/docs">Browse Knowledge Base</Link>
+              <Link href="/chat">Chat</Link>
             </Button>
-            <OpenAssistantButton size="lg" className="landing-btn-motion">Ask AI</OpenAssistantButton>
+            <OpenHumanHandoffButton size="lg" className="landing-btn-motion">
+              Talk to Human
+            </OpenHumanHandoffButton>
           </div>
         </div>
         <div className="landing-hero-item landing-hero-item-4 rounded-2xl border border-border bg-card p-6">

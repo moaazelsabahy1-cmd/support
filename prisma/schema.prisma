@@ -95,6 +95,22 @@ enum EmbeddingStatus {
   FAILED
 }
 
+enum HumanHandoffStatus {
+  PENDING
+  OFFERED
+  ACCEPTED
+  NO_AGENT_AVAILABLE
+  CANCELLED
+  COMPLETED
+}
+
+enum AgentHandoffAttemptStatus {
+  OFFERED
+  DECLINED
+  ACCEPTED
+  SKIPPED
+}
+
 model Organization {
   id            String             @id
   name          String
@@ -163,6 +179,9 @@ model User {
   chatLogs       AiChatLog[]
   notifications  Notification[]
   pushSubs       PushSubscription[]
+  handoffsAsCustomer HumanHandoff[] @relation("HandoffCustomer")
+  handoffsOffered    HumanHandoff[] @relation("HandoffCurrentAgent")
+  handoffAttempts    AgentHandoffAttempt[]
 
   @@unique([email])
   @@index([organizationId])
@@ -340,12 +359,52 @@ model Conversation {
   ticket       Ticket?       @relation(fields: [ticketId], references: [id], onDelete: SetNull)
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
   messages     Message[]
+  humanHandoff HumanHandoff?
 
   @@index([customerId])
   @@index([agentId])
   @@index([aiPaused, status])
   @@index([sourceSessionId])
   @@map("conversations")
+}
+
+model HumanHandoff {
+  id              String             @id
+  conversationId  String             @unique @map("conversation_id")
+  customerId      String             @map("customer_id")
+  currentAgentId  String?            @map("current_agent_id")
+  status          HumanHandoffStatus @default(PENDING)
+  handoffReason   AiHandoffReason    @map("handoff_reason")
+  currentAttempt  Int                @default(1) @map("current_attempt")
+  createdAt       DateTime           @default(now()) @map("created_at")
+  acceptedAt      DateTime?          @map("accepted_at")
+  completedAt     DateTime?          @map("completed_at")
+
+  conversation Conversation           @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  customer     User                   @relation("HandoffCustomer", fields: [customerId], references: [id], onDelete: Restrict)
+  currentAgent User?                  @relation("HandoffCurrentAgent", fields: [currentAgentId], references: [id], onDelete: SetNull)
+  attempts     AgentHandoffAttempt[]
+
+  @@index([currentAgentId, status])
+  @@index([status])
+  @@map("human_handoffs")
+}
+
+model AgentHandoffAttempt {
+  id          String                    @id
+  handoffId   String                    @map("handoff_id")
+  agentId     String                    @map("agent_id")
+  order       Int
+  status      AgentHandoffAttemptStatus @default(OFFERED)
+  offeredAt   DateTime                  @default(now()) @map("offered_at")
+  respondedAt DateTime?                 @map("responded_at")
+
+  handoff HumanHandoff @relation(fields: [handoffId], references: [id], onDelete: Cascade)
+  agent   User         @relation(fields: [agentId], references: [id], onDelete: Restrict)
+
+  @@unique([handoffId, order])
+  @@index([agentId, status])
+  @@map("agent_handoff_attempts")
 }
 
 model Message {

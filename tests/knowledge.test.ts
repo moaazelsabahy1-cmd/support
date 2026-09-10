@@ -13,6 +13,9 @@ import { trainingPairSchema, webSourceSchema, knowledgeListSchema } from "../lib
 import { AppError } from "../lib/api-response";
 import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
 import { knowledgeIsSufficient } from "../lib/ai/agent";
+import { detectLanguage } from "../lib/ai/language";
+import { isSolvioSpecific } from "../lib/ai/question-kind";
+import { nextHandoffAttempt, MAX_HANDOFF_AGENTS, publicHandoffAgentCards } from "../lib/ai/handoff-queue";
 import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
 import { DEFAULT_ANSWER_CONFIDENCE_THRESHOLD } from "../lib/env";
 import { clampKnowledgeCategory, normalizeKnowledgeTags, ticketHasLearnableContent, knowledgeReviewSourceLabel, isTrivialSupportText } from "../lib/ai/knowledge-taxonomy";
@@ -245,9 +248,53 @@ describe("detectIntent", () => {
     expect(detectIntent("Can I speak to support?")).toBe("escalate");
     expect(detectIntent("Human please")).toBe("escalate");
     expect(detectIntent("I need a real person")).toBe("escalate");
+    expect(detectIntent("Talk to human")).toBe("escalate");
+    expect(detectIntent("I need an agent")).toBe("escalate");
+    expect(detectIntent("عايز أكلم موظف")).toBe("escalate");
+    expect(detectIntent("عايز اتكلم مع حد")).toBe("escalate");
+    expect(detectIntent("ممكن أكلم خدمة العملاء؟")).toBe("escalate");
+    expect(detectIntent("عايز حد يساعدني")).toBe("escalate");
     expect(detectIntent("how to create account")).toBe("question");
     expect(detectIntent("What is the travel agent processing fee?")).toBe("question");
     expect(detectIntent("personal account recovery")).toBe("question");
+  });
+});
+
+describe("language and question kind", () => {
+  it("detects Arabic, English, and mixed messages", () => {
+    expect(detectLanguage("ازاي اعمل ticket؟")).toBe("mixed");
+    expect(detectLanguage("How do I create a ticket?")).toBe("en");
+    expect(detectLanguage("عايز أعرف ازاي أعمل تذكرة")).toBe("ar");
+  });
+
+  it("treats VPN and HTTP as general and tickets as Solvio-specific", () => {
+    expect(isSolvioSpecific("What is a VPN?")).toBe(false);
+    expect(isSolvioSpecific("What is the difference between HTTP and HTTPS?")).toBe(false);
+    expect(isSolvioSpecific("How do I create a ticket?")).toBe(true);
+    expect(isSolvioSpecific("ازاي اعمل ticket؟")).toBe(true);
+  });
+});
+
+describe("handoff queue order", () => {
+  it("advances 1→2→3→4 and never wraps", () => {
+    expect(MAX_HANDOFF_AGENTS).toBe(4);
+    expect(nextHandoffAttempt(1, 4)).toBe(2);
+    expect(nextHandoffAttempt(2, 4)).toBe(3);
+    expect(nextHandoffAttempt(3, 4)).toBe(4);
+    expect(nextHandoffAttempt(4, 4)).toBeNull();
+    expect(nextHandoffAttempt(2, 2)).toBeNull();
+  });
+
+  it("labels four public agent cards without emails", () => {
+    const cards = publicHandoffAgentCards([
+      { id: "a1", name: "Maya" },
+      { id: "a2", name: "Omar" },
+      { id: "a3", name: "Lin" },
+      { id: "a4", name: "Sam" },
+    ]);
+    expect(cards).toHaveLength(4);
+    expect(cards[0]).toMatchObject({ label: "Agent 1", title: "Support Agent", ordinal: 1 });
+    expect(JSON.stringify(cards)).not.toMatch(/@/);
   });
 });
 

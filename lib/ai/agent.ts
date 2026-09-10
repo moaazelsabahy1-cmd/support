@@ -1,16 +1,16 @@
 import { prisma } from "@/lib/db";
 import { retrieveKnowledge, type RetrievedHit } from "@/lib/ai/retrieval";
-import { detectIntent, groundedPrompt, publicSourceLabel } from "@/lib/ai/prompts";
+import { detectIntent, generalKnowledgePrompt, groundedPrompt, publicSourceLabel } from "@/lib/ai/prompts";
 import { getChatModel, getEmbeddingModel, requireLlm, type LlmProvider } from "@/lib/ai/providers";
 import { knowledgeOrgId } from "@/lib/ai/org";
 import { knowledgeConfidenceThreshold } from "@/lib/env";
+import { detectLanguage, languagePromptLabel, localizedHumanConnect, localizedNoKnowledge } from "@/lib/ai/language";
+import { isSolvioSpecific } from "@/lib/ai/question-kind";
 import { aiLog, aiWarn } from "@/lib/ai/log";
 import { newId } from "@/lib/id";
 import type { AiHandoffReason, PublicSourceRef } from "@/types";
 import type { Prisma } from "@prisma/client";
 
-const NO_KNOWLEDGE =
-  "I don't have enough verified information to answer that.\nI'll connect you with a human agent.";
 const EMPTY_REPLY =
   "I could not generate an answer. Please create a support ticket or talk to a human agent.";
 const PROVIDER_FAIL =
@@ -49,96 +49,144 @@ export async function answerQuestion(opts: {
   language?: string;
   llm?: LlmProvider | "fail";
 }): Promise<AnswerQuestionResult> {
+  const detected = detectLanguage(opts.message);
+  const language = languagePromptLabel(detected, opts.language);
   const intent = detectIntent(opts.message);
+
+  if (intent === "escalate") {
+    return logAndReturn({
+      ...opts,
+      response: localizedHumanConnect(detected),
+      sources: [],
+      retrievalScores: [],
+      escalated: true,
+      knowledgeSufficient: false,
+      handoffReason: "CUSTOMER_REQUESTED_HUMAN",
+      confidence: 0.2,
+      model: "policy",
+      fallbackUsed: false,
+    });
+  }
+
   const org = opts.organizationId || (await knowledgeOrgId(opts.userId));
   const threshold = knowledgeConfidenceThreshold();
   const retrieved = await retrieveKnowledge({ query: opts.message, filters: { organizationId: org } });
   const chunks = retrieved.hits;
   const top = chunks[0]?.score ?? 0;
   const sufficient = knowledgeIsSufficient(chunks, threshold);
-
-  if (!sufficient && intent === "escalate") {
-    return logAndReturn({
-      ...opts,
-      response:
-        "I can connect you with a human agent. Use Talk to a human agent to open a live conversation.",
-      sources: [],
-      retrievalScores: chunks.map((c) => c.score),
-      escalated: true,
-      knowledgeSufficient: false,
-      handoffReason: "CUSTOMER_REQUESTED_HUMAN",
-      confidence: 0.2,
-      model: "policy",
-      fallbackUsed: retrieved.fallbackUsed,
-    });
-  }
-
-  if (!sufficient) {
-    const handoffReason = handoffReasonForHits(chunks, threshold);
-    aiLog("ai", "no confident knowledge", { handoffReason, top, sourceId: chunks[0]?.sourceId });
-    return logAndReturn({
-      ...opts,
-      response: NO_KNOWLEDGE,
-      sources: [],
-      retrievalScores: chunks.map((c) => c.score),
-      escalated: true,
-      knowledgeSufficient: false,
-      handoffReason,
-      confidence: top,
-      model: getChatModel(),
-      fallbackUsed: retrieved.fallbackUsed,
-    });
-  }
-
   const history = await loadSessionHistory(opts.sessionId);
-  const publicSources: PublicSourceRef[] = chunks.map(publicSourceLabel);
-  try {
-    if (opts.llm === "fail") {
-      throw new Error("injected provider failure");
+
+  if (sufficient) {
+    const publicSources: PublicSourceRef[] = chunks.map(publicSourceLabel);
+    try {
+      if (opts.llm === "fail") {
+        throw new Error("injected provider failure");
+      }
+      const llm = opts.llm ?? requireLlm();
+      const completion = await llm.generateText({
+        messages: groundedPrompt(opts.message, chunks, history, {
+          assistantName: opts.assistantName,
+          language,
+        }),
+        temperature: 0.2,
+      });
+      const response = completion.text.trim() || EMPTY_REPLY;
+      aiLog("ai", "completion ok", {
+        model: completion.model,
+        tokens: completion.tokens,
+        promptTokens: completion.promptTokens,
+        completionTokens: completion.completionTokens,
+      });
+      return logAndReturn({
+        ...opts,
+        response,
+        sources: publicSources,
+        retrievalScores: chunks.map((c) => c.score),
+        escalated: false,
+        knowledgeSufficient: true,
+        handoffReason: null,
+        confidence: top,
+        model: completion.model,
+        tokens: completion.tokens,
+        fallbackUsed: retrieved.fallbackUsed,
+      });
+    } catch (error) {
+      aiWarn("ai", "provider request failed", { error });
+      return logAndReturn({
+        ...opts,
+        response: PROVIDER_FAIL,
+        sources: publicSources,
+        retrievalScores: chunks.map((c) => c.score),
+        escalated: true,
+        knowledgeSufficient: false,
+        handoffReason: "AI_ERROR",
+        confidence: top,
+        model: getChatModel(),
+        fallbackUsed: retrieved.fallbackUsed,
+      });
     }
-    const llm = opts.llm ?? requireLlm();
-    const completion = await llm.generateText({
-      messages: groundedPrompt(opts.message, chunks, history, {
-        assistantName: opts.assistantName,
-        language: opts.language,
-      }),
-      temperature: 0.2,
-    });
-    const response = completion.text.trim() || EMPTY_REPLY;
-    aiLog("ai", "completion ok", {
-      model: completion.model,
-      tokens: completion.tokens,
-      promptTokens: completion.promptTokens,
-      completionTokens: completion.completionTokens,
-    });
-    return logAndReturn({
-      ...opts,
-      response,
-      sources: publicSources,
-      retrievalScores: chunks.map((c) => c.score),
-      escalated: false,
-      knowledgeSufficient: true,
-      handoffReason: null,
-      confidence: top,
-      model: completion.model,
-      tokens: completion.tokens,
-      fallbackUsed: retrieved.fallbackUsed,
-    });
-  } catch (error) {
-    aiWarn("ai", "provider request failed", { error });
-    return logAndReturn({
-      ...opts,
-      response: PROVIDER_FAIL,
-      sources: publicSources,
-      retrievalScores: chunks.map((c) => c.score),
-      escalated: true,
-      knowledgeSufficient: false,
-      handoffReason: "AI_ERROR",
-      confidence: top,
-      model: getChatModel(),
-      fallbackUsed: retrieved.fallbackUsed,
-    });
   }
+
+  if (!isSolvioSpecific(opts.message)) {
+    try {
+      if (opts.llm === "fail") {
+        throw new Error("injected provider failure");
+      }
+      const llm = opts.llm ?? requireLlm();
+      const completion = await llm.generateText({
+        messages: generalKnowledgePrompt(opts.message, history, {
+          assistantName: opts.assistantName,
+          language,
+        }),
+        temperature: 0.2,
+      });
+      const response = completion.text.trim() || EMPTY_REPLY;
+      aiLog("ai", "general knowledge ok", { model: completion.model, tokens: completion.tokens });
+      return logAndReturn({
+        ...opts,
+        response,
+        sources: [],
+        retrievalScores: chunks.map((c) => c.score),
+        escalated: false,
+        knowledgeSufficient: false,
+        handoffReason: null,
+        confidence: top,
+        model: completion.model,
+        tokens: completion.tokens,
+        fallbackUsed: retrieved.fallbackUsed,
+        offerHuman: true,
+      });
+    } catch (error) {
+      aiWarn("ai", "general knowledge failed", { error });
+      return logAndReturn({
+        ...opts,
+        response: PROVIDER_FAIL,
+        sources: [],
+        retrievalScores: chunks.map((c) => c.score),
+        escalated: true,
+        knowledgeSufficient: false,
+        handoffReason: "AI_ERROR",
+        confidence: top,
+        model: getChatModel(),
+        fallbackUsed: retrieved.fallbackUsed,
+      });
+    }
+  }
+
+  const handoffReason = handoffReasonForHits(chunks, threshold);
+  aiLog("ai", "no confident knowledge", { handoffReason, top, sourceId: chunks[0]?.sourceId });
+  return logAndReturn({
+    ...opts,
+    response: localizedNoKnowledge(detected),
+    sources: [],
+    retrievalScores: chunks.map((c) => c.score),
+    escalated: true,
+    knowledgeSufficient: false,
+    handoffReason,
+    confidence: top,
+    model: getChatModel(),
+    fallbackUsed: retrieved.fallbackUsed,
+  });
 }
 
 async function loadSessionHistory(sessionId: string) {
@@ -173,6 +221,7 @@ async function logAndReturn(opts: {
   model?: string;
   tokens?: number;
   fallbackUsed: boolean;
+  offerHuman?: boolean;
 }): Promise<AnswerQuestionResult> {
   await prisma.aiChatLog.create({
     data: {
@@ -188,13 +237,13 @@ async function logAndReturn(opts: {
       tokens: opts.tokens,
       model: opts.model,
       embeddingModel: getEmbeddingModel(),
-      escalated: opts.escalated || !opts.knowledgeSufficient,
+      escalated: opts.escalated,
       fallbackUsed: opts.fallbackUsed,
       confidence: opts.confidence,
       handoffReason: opts.handoffReason,
     },
   });
-  const offerHuman = !opts.knowledgeSufficient || opts.escalated;
+  const offerHuman = opts.offerHuman ?? (!opts.knowledgeSufficient || opts.escalated);
   return {
     answer: opts.response,
     response: opts.response,

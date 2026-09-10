@@ -302,6 +302,6 @@ export async function listAiLogsAction(sessionId?: string) {
   return serialize(items);
 }
 
-export async function escalateAction(sessionId: string) {
-  return escalateAiToHumanAction(sessionId);
+export async function escalateAction(sessionId: string, selectedAgentId?: string) {
+  return escalateAiToHumanAction(sessionId, selectedAgentId);
 }

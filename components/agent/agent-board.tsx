@@ -7,27 +7,76 @@ import { Button } from "@/components/ui/button";
 import { updateTicketAction } from "@/actions/tickets";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
+import { getSocket } from "@/lib/socket";
+
+type ChatRow = {
+  _id: string;
+  aiPaused?: boolean;
+  status?: string;
+  handoffReason?: string | null;
+  lastQuestion?: string | null;
+  customer?: { name?: string; email?: string } | null;
+  humanHandoff?: {
+    id?: string;
+    _id?: string;
+    status?: string;
+    currentAttempt?: number;
+    currentAgentId?: string | null;
+  } | null;
+};
 
 export function AgentBoard() {
   const { data } = useSession();
   const [unassigned, setUnassigned] = useState<{ _id: string; number: string; title: string }[]>([]);
-  const [chats, setChats] = useState<
-    {
-      _id: string;
-      aiPaused?: boolean;
-      status?: string;
-      handoffReason?: string | null;
-      lastQuestion?: string | null;
-      customer?: { name?: string; email?: string } | null;
-    }[]
-  >([]);
+  const [chats, setChats] = useState<ChatRow[]>([]);
+
+  async function load() {
+    const tickets = await fetch("/api/tickets?assigned=unassigned").then((r) => r.json());
+    if (tickets.success) setUnassigned(tickets.data.items);
+    const convs = await fetch("/api/conversations").then((r) => r.json());
+    if (convs.success) setChats(convs.data);
+  }
 
   useEffect(() => {
-    fetch("/api/tickets?assigned=unassigned").then((r) => r.json()).then((j) => j.success && setUnassigned(j.data.items));
-    fetch("/api/conversations").then((r) => r.json()).then((j) => j.success && setChats(j.data));
+    void load();
+    const s = getSocket();
+    const refresh = () => void load();
+    s?.on("handoff:offered", refresh);
+    s?.on("handoff:accepted", refresh);
+    s?.on("handoff:declined", refresh);
+    s?.on("notification:new", refresh);
+    return () => {
+      s?.off("handoff:offered", refresh);
+      s?.off("handoff:accepted", refresh);
+      s?.off("handoff:declined", refresh);
+      s?.off("notification:new", refresh);
+    };
   }, []);
 
+  const myId = data?.user?.id;
+  const incoming = chats.filter(
+    (c) => c.humanHandoff?.status === "OFFERED" && c.humanHandoff.currentAgentId === myId,
+  );
   const waiting = chats.filter((c) => c.aiPaused && c.status === "OPEN");
+
+  async function act(handoffId: string, accept: boolean) {
+    const res = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(accept ? { acceptHandoff: true, handoffId } : { declineHandoff: true, handoffId }),
+    });
+    const json = await res.json();
+    if (!json.success) {
+      toast.error(json.error?.message || "Handoff update failed");
+      return;
+    }
+    toast.success(accept ? "Accepted" : "Declined");
+    if (accept) {
+      const convId = incoming.find((c) => (c.humanHandoff?.id || c.humanHandoff?._id) === handoffId)?._id;
+      if (convId) window.location.href = `/chat/${convId}`;
+    }
+    void load();
+  }
 
   return (
     <div className="space-y-6">
@@ -47,22 +96,29 @@ export function AgentBoard() {
         </Card>
       </div>
       <Card>
-        <h2 className="font-semibold">Waiting for human</h2>
+        <h2 className="font-semibold">NEW CUSTOMER REQUEST</h2>
         <ul className="mt-3 space-y-2">
-          {waiting.map((c) => (
-            <li key={c._id} className="flex items-center justify-between gap-3 text-sm">
-              <span>
-                {c.customer?.name ? `${c.customer.name} · ` : ""}
-                {c.lastQuestion?.slice(0, 80) || `Chat ${c._id.slice(-6)}`}
-                {c.handoffReason ? <span className="block text-xs text-muted-foreground">{c.handoffReason}</span> : null}
-                {c.customer?.email ? <span className="block text-xs text-muted-foreground">{c.customer.email}</span> : null}
-              </span>
-              <Button size="sm" asChild>
-                <a href={`/chat/${c._id}`}>Open chat</a>
-              </Button>
-            </li>
-          ))}
-          {!waiting.length ? <li className="text-sm text-muted-foreground">No AI handoffs waiting.</li> : null}
+          {incoming.map((c) => {
+            const hid = c.humanHandoff?.id || c.humanHandoff?._id || "";
+            return (
+              <li key={c._id} className="rounded-lg border p-3 text-sm">
+                <p>
+                  Customer: {c.customer?.name || "Unknown"}
+                </p>
+                <p className="text-xs text-muted-foreground">Customer wants to talk to a human.</p>
+                <p className="text-xs text-muted-foreground">Reason: {c.handoffReason || "CUSTOMER_REQUESTED_HUMAN"}</p>
+                {c.lastQuestion ? <p className="mt-1">{c.lastQuestion}</p> : null}
+                <div className="mt-2 flex gap-2">
+                  <Button size="sm" onClick={() => act(hid, true)}>Accept</Button>
+                  <Button size="sm" variant="outline" onClick={() => act(hid, false)}>Decline</Button>
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={`/chat/${c._id}`}>Open conversation</a>
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+          {!incoming.length ? <li className="text-sm text-muted-foreground">No handoff offered to you.</li> : null}
         </ul>
       </Card>
       <Card>
@@ -81,7 +137,7 @@ export function AgentBoard() {
           ))}
         </ul>
       </Card>
-      <TicketList assigned="me" />
+      <TicketList />
     </div>
   );
 }

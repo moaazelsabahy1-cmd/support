@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { answerQuestion, type AnswerQuestionResult } from "@/lib/ai/agent";
 import { knowledgeOrgId } from "@/lib/ai/org";
 import { persistAiHandoff } from "@/lib/ai/handoff";
+import { AppError } from "@/lib/api-response";
 import { findOrCreateCustomerConversation } from "@/lib/ai/conversation";
 import { emitToConversation } from "@/lib/socket-server";
 import { serialize } from "@/lib/serialize";
@@ -109,19 +110,45 @@ export async function handleCustomerAiTurn(opts: {
     llm: opts.llm,
   });
 
-  const shouldHandoff = !result.knowledgeSufficient || result.escalated || result.handoffReason === "AI_ERROR";
-  if (shouldHandoff) {
-    const handed = await persistAiHandoff({
-      userId: user.id,
-      conversationId: conv.id,
-      sessionId: opts.sessionId,
-      reason: result.handoffReason || "KNOWLEDGE_NOT_FOUND",
-      lastQuestion: opts.message,
-      aiResponse: result.response,
-      sources: result.sources,
-      turnKey: `handoff:${key}`,
+  const shouldHandoff = result.escalated || result.handoffReason === "AI_ERROR";
+  if (result.handoffReason === "CUSTOMER_REQUESTED_HUMAN") {
+    const aiMsg = await prisma.message.create({
+      data: {
+        id: newId(),
+        conversationId: conv.id,
+        senderId: SYSTEM_AI_USER_ID,
+        body: result.response,
+        attachmentIds: [],
+        readBy: [SYSTEM_AI_USER_ID],
+        role: "AI",
+        aiTurnKey: `ai:${key}`,
+      },
     });
-    return { ...result, offerHuman: false, handedOff: true, conversationId: handed.id, aiPaused: true };
+    emitToConversation(conv.id, "message:new", serialize(aiMsg));
+    return {
+      ...result,
+      offerHuman: true,
+      handedOff: false,
+      conversationId: conv.id,
+      aiPaused: false,
+    };
+  }
+  if (shouldHandoff) {
+    try {
+      const handed = await persistAiHandoff({
+        userId: user.id,
+        conversationId: conv.id,
+        sessionId: opts.sessionId,
+        reason: result.handoffReason || "KNOWLEDGE_NOT_FOUND",
+        lastQuestion: opts.message,
+        aiResponse: result.response,
+        sources: result.sources,
+        turnKey: `handoff:${key}`,
+      });
+      return { ...result, offerHuman: false, handedOff: true, conversationId: handed.id, aiPaused: true };
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "HUMAN_SUPPORT_CLOSED") throw error;
+    }
   }
 
   const aiMsg = await prisma.message.create({

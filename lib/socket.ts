@@ -17,3 +17,16 @@ export function getSocket() {
   });
   return socket;
 }
+
+export function getWidgetSocket(widgetToken: string) {
+  if (typeof window === "undefined") return null;
+  return io({
+    path: process.env.NEXT_PUBLIC_SOCKET_PATH || "/socket.io",
+    withCredentials: false,
+    auth: { widgetToken },
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    reconnectionDelayMax: 5000,
+  });
+}

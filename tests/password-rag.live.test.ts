@@ -91,7 +91,8 @@ describe("password-reset RAG", () => {
       message: "I want to talk to a human",
       sessionId: `rag-human-${Date.now()}`,
     });
-    expect(human.handedOff).toBe(true);
+    expect(human.handedOff).toBe(false);
+    expect(human.offerHuman).toBe(true);
     expect(human.handoffReason).toBe("CUSTOMER_REQUESTED_HUMAN");
 
     console.info("[password-rag] A/B/C", {

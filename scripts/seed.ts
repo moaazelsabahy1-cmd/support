@@ -11,6 +11,8 @@ const ACCOUNTS = [
   { name: "Noah Adler", email: "admin@solvio.local", password: "SolvioAdmin1!", role: "ADMIN" as const },
   { name: "Maya Chen", email: "agent@solvio.local", password: "SolvioAgent1!", role: "AGENT" as const },
   { name: "Luis Park", email: "agent2@solvio.local", password: "SolvioAgent1!", role: "AGENT" as const },
+  { name: "Nina Okonkwo", email: "agent3@solvio.local", password: "SolvioAgent1!", role: "AGENT" as const },
+  { name: "Omar Haddad", email: "agent4@solvio.local", password: "SolvioAgent1!", role: "AGENT" as const },
   { name: "Ava Patel", email: "customer@solvio.local", password: "SolvioCustomer1!", role: "CUSTOMER" as const },
   { name: "Ben Ortiz", email: "customer2@solvio.local", password: "SolvioCustomer1!", role: "CUSTOMER" as const },
 ];
@@ -285,6 +287,9 @@ async function main() {
   console.log("  superadmin@solvio.local / SolvioSuper1!");
   console.log("  admin@solvio.local / SolvioAdmin1!");
   console.log("  agent@solvio.local / SolvioAgent1!");
+  console.log("  agent2@solvio.local / SolvioAgent1!");
+  console.log("  agent3@solvio.local / SolvioAgent1!");
+  console.log("  agent4@solvio.local / SolvioAgent1!");
   console.log("  customer@solvio.local / SolvioCustomer1!");
   process.exit(0);
 }

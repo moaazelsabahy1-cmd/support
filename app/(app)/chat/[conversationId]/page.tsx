@@ -10,8 +10,8 @@ export default async function ConversationChatPage({
   const { conversationId } = await params;
   return (
     <div>
-      <h1 className="mb-4 text-2xl font-semibold">Live chat</h1>
-      <ChatApp userId={user.id} initialConversationId={conversationId} />
+      <h1 className="mb-4 text-2xl font-semibold">Chat</h1>
+      <ChatApp userId={user.id} role={user.role} initialConversationId={conversationId} />
     </div>
   );
 }

@@ -87,7 +87,7 @@ describe("intent handoff reasons", () => {
     const createAccountSystem = await prisma.message.count({
       where: { conversationId: createAccount.conversationId!, role: "SYSTEM" },
     });
-    expect(createAccountSystem).toBe(1);
+    expect(createAccountSystem).toBe(2);
 
     const retryCreate = await handleCustomerAiTurn({
       userId: createAccountUserId,
@@ -108,7 +108,7 @@ describe("intent handoff reasons", () => {
       await prisma.message.count({
         where: { conversationId: createAccount.conversationId!, role: "SYSTEM" },
       }),
-    ).toBe(1);
+    ).toBe(2);
 
     const convAfterKnowledge = await prisma.conversation.findUniqueOrThrow({
       where: { id: createAccount.conversationId! },
@@ -129,21 +129,21 @@ describe("intent handoff reasons", () => {
       await prisma.message.count({
         where: { conversationId: createAccount.conversationId!, role: "SYSTEM" },
       }),
-    ).toBe(1);
+    ).toBe(2);
 
     const wantHuman = await handleCustomerAiTurn({
       userId: wantHumanUserId,
       message: "I want to talk to a human",
       sessionId: `intent-human-${Date.now()}`,
     });
-    expect(wantHuman.handedOff).toBe(true);
-    expect(wantHuman.offerHuman).toBe(false);
+    expect(wantHuman.handedOff).toBe(false);
+    expect(wantHuman.offerHuman).toBe(true);
     expect(wantHuman.handoffReason).toBe("CUSTOMER_REQUESTED_HUMAN");
     expect(
       await prisma.message.count({
         where: { conversationId: wantHuman.conversationId!, role: "SYSTEM" },
       }),
-    ).toBe(1);
+    ).toBe(0);
     const humanAsk = await prisma.message.findFirst({
       where: { conversationId: wantHuman.conversationId!, role: "CUSTOMER" },
     });
@@ -182,4 +182,48 @@ describe("intent handoff reasons", () => {
     };
     console.info("[intent-handoff] reasons", report);
   }, 180_000);
+
+  it("answers a general question without handing off", async () => {
+    const user = await prisma.user.create({
+      data: {
+        id: newId(),
+        name: "Intent VPN",
+        email: `intent-vpn-${Date.now()}@solvio.local`,
+        emailVerified: true,
+        role: "CUSTOMER",
+        organizationId: DEFAULT_ORGANIZATION_ID,
+      },
+    });
+    ids.push(user.id);
+    const turn = await handleCustomerAiTurn({
+      userId: user.id,
+      message: "What is a VPN?",
+      sessionId: `intent-vpn-${Date.now()}`,
+    });
+    expect(turn.handedOff).toBe(false);
+    expect(turn.escalated).toBe(false);
+    expect(turn.response.toLowerCase()).toMatch(/virtual private|vpn|network/);
+  }, 180_000);
+
+  it("treats Arabic human requests as CUSTOMER_REQUESTED_HUMAN", async () => {
+    const user = await prisma.user.create({
+      data: {
+        id: newId(),
+        name: "Intent Arabic Human",
+        email: `intent-ar-${Date.now()}@solvio.local`,
+        emailVerified: true,
+        role: "CUSTOMER",
+        organizationId: DEFAULT_ORGANIZATION_ID,
+      },
+    });
+    ids.push(user.id);
+    const turn = await handleCustomerAiTurn({
+      userId: user.id,
+      message: "عايز أكلم موظف",
+      sessionId: `intent-ar-${Date.now()}`,
+    });
+    expect(turn.handedOff).toBe(false);
+    expect(turn.offerHuman).toBe(true);
+    expect(turn.handoffReason).toBe("CUSTOMER_REQUESTED_HUMAN");
+  }, 120_000);
 });

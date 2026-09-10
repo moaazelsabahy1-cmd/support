@@ -6,6 +6,8 @@ import {
   listMessagesAction,
   sendMessageAction,
   closeConversationAction,
+  acceptHandoffAction,
+  declineHandoffAction,
 } from "@/actions/messages";
 
 export async function GET() {
@@ -21,6 +23,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     if (body.listMessages) return jsonOk(await listMessagesAction(body.conversationId));
     if (body.close) return jsonOk(await closeConversationAction(body.conversationId));
+    if (body.acceptHandoff) return jsonOk(await acceptHandoffAction(body.handoffId));
+    if (body.declineHandoff) return jsonOk(await declineHandoffAction(body.handoffId));
     if (body.send) {
       return jsonOk(await sendMessageAction(body.conversationId, body.body, body.attachmentIds || []), 201);
     }

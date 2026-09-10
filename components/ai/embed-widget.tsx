@@ -5,6 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { newBrowserId } from "@/lib/browser-id";
+import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
+import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai/human-support-hours";
 
 type WidgetConfig = {
   title: string;
@@ -58,6 +60,14 @@ export function EmbedWidget() {
   const [offer, setOffer] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [human, setHuman] = useState(false);
+  const [widgetToken, setWidgetToken] = useState("");
+  const [status, setStatus] = useState("");
+  const [picking, setPicking] = useState(false);
+  const [agents, setAgents] = useState<AgentCard[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [supportOpen, setSupportOpen] = useState(true);
+  const [hoursHint, setHoursHint] = useState("");
 
   useEffect(() => {
     const resolvedParent = detectParentOrigin(queryParent);
@@ -82,6 +92,20 @@ export function EmbedWidget() {
       })
       .catch(() => setError("Could not load the assistant"))
       .finally(() => setReady(true));
+    fetch("/api/widget/chat", {
+      method: "POST",
+      headers: widgetHeaders(key, resolvedParent),
+      body: JSON.stringify({ listAgents: true, sessionId }),
+    })
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.success) return;
+        const parsed = parseHandoffAgentsPayload(json.data);
+        setAgents(parsed.agents);
+        setSupportOpen(parsed.open);
+        setHoursHint(parsed.message);
+      })
+      .catch(() => undefined);
   }, [key, queryParent]);
 
   async function send(message: string) {
@@ -94,13 +118,18 @@ export function EmbedWidget() {
       const res = await fetch("/api/widget/chat", {
         method: "POST",
         headers: widgetHeaders(key, parent),
-        body: JSON.stringify({ message: text, sessionId }),
+        body: JSON.stringify(
+          human && widgetToken
+            ? { send: true, message: text, sessionId, widgetToken }
+            : { message: text, sessionId },
+        ),
       });
       const json = await res.json();
       if (!json.success) {
         setError(json.error?.message || "Error");
         return;
       }
+      if (human) return;
       setMessages((m) => [...m, { role: "assistant", text: json.data.response }]);
       setOffer(Boolean(json.data.offerHuman));
     } catch {
@@ -141,24 +170,53 @@ export function EmbedWidget() {
             ))
           : <p className="text-sm text-muted-foreground">Loading…</p>}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
+        {human && status ? <p className="text-xs text-muted-foreground">{status}</p> : null}
       </div>
-      {offer ? (
-        <Button
-          className="mt-2"
-          variant="outline"
-          type="button"
-          onClick={async () => {
-            await fetch("/api/widget/chat", {
+      <Button
+        className="mt-2"
+        variant="outline"
+        type="button"
+        disabled={!supportOpen}
+        onClick={() => {
+          if (!supportOpen) {
+            setError(hoursHint || HUMAN_SUPPORT_HOURS_MESSAGE);
+            return;
+          }
+          setPicking(true);
+        }}
+      >
+        Talk to a human agent
+      </Button>
+      {!supportOpen ? (
+        <p className="mt-2 whitespace-pre-line text-xs text-muted-foreground">{hoursHint || HUMAN_SUPPORT_HOURS_MESSAGE}</p>
+      ) : null}
+      {picking && !human ? (
+        <AgentPicker
+          agents={agents}
+          selectedAgentId={selectedAgentId}
+          onSelect={setSelectedAgentId}
+          sending={busy}
+          onSend={async () => {
+            if (!selectedAgentId) return;
+            setBusy(true);
+            const res = await fetch("/api/widget/chat", {
               method: "POST",
               headers: widgetHeaders(key, parent),
-              body: JSON.stringify({ escalate: true, sessionId }),
+              body: JSON.stringify({ escalate: true, sessionId, selectedAgentId }),
             });
-            setMessages((m) => [...m, { role: "assistant", text: "A human teammate will follow up. Thank you." }]);
+            const json = await res.json();
+            setBusy(false);
+            if (!json.success) {
+              setError(json.error?.message || "Could not start human support");
+              return;
+            }
+            setHuman(true);
+            setPicking(false);
+            setWidgetToken(json.data.widgetToken || "");
+            setStatus(`Request sent to Agent ${json.data.handoff?.currentAttempt || 1}. Waiting for Agent ${json.data.handoff?.currentAttempt || 1}...`);
             setOffer(false);
           }}
-        >
-          Talk to a human agent
-        </Button>
+        />
       ) : null}
       <form className="mt-2 flex gap-2" onSubmit={onSubmit}>
         <Input name="q" aria-label="Message" disabled={!ready || Boolean(error && !messages.length)} />

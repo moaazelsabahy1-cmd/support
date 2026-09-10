@@ -2,6 +2,8 @@ const ESCALATE_PHRASES = [
   "talk to a human",
   "talk to an agent",
   "talk to support",
+  "talk to human",
+  "i need an agent",
   "speak to a human",
   "speak to an agent",
   "speak to support",
@@ -15,9 +17,28 @@ const ESCALATE_PHRASES = [
   "human please",
 ];
 
+const ESCALATE_ARABIC = [
+  "عايز أكلم موظف",
+  "عايز اكلم موظف",
+  "عايز أتكلم مع حد",
+  "عايز اتكلم مع حد",
+  "ممكن موظف يساعدني",
+  "عايز إنسان",
+  "عايز انسان",
+  "ممكن أكلم خدمة العملاء",
+  "عايز حد يساعدني",
+  "كلم موظف",
+  "تحدث مع موظف",
+];
+
 export function detectIntent(message: string) {
   const t = message.toLowerCase();
-  if (ESCALATE_PHRASES.some((p) => t.includes(p)) || /\bescalate(\s+this)?\b/.test(t)) {
+  const compact = message.replace(/\s+/g, " ").trim();
+  if (
+    ESCALATE_PHRASES.some((p) => t.includes(p)) ||
+    ESCALATE_ARABIC.some((p) => compact.includes(p)) ||
+    /\bescalate(\s+this)?\b/.test(t)
+  ) {
     return "escalate";
   }
   if (/(billing|invoice|refund|charge)/.test(t)) return "billing";
@@ -43,10 +64,7 @@ export function groundedPrompt(
     .slice(0, 12000);
   const name = (options?.assistantName || "Solvio").trim() || "Solvio";
   const language = (options?.language || "").trim();
-  const languageLine =
-    language && language.toLowerCase() !== "en" && language.toLowerCase() !== "english"
-      ? `\nRespond in ${language}.`
-      : "";
+  const languageLine = language ? `\nRespond in ${language}. Prefer the customer's dialect (including Egyptian Arabic when they used it).` : "";
   return [
     {
       role: "system" as const,
@@ -63,6 +81,31 @@ When citing, refer to verified support knowledge. Do not mention conversation ID
 
 Retrieved knowledge:
 ${context || "(no knowledge retrieved)"}`,
+    },
+    ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    { role: "user" as const, content: question },
+  ];
+}
+
+export function generalKnowledgePrompt(
+  question: string,
+  history: { role: "user" | "assistant"; content: string }[] = [],
+  options?: GroundedPromptOptions,
+) {
+  const name = (options?.assistantName || "Solvio").trim() || "Solvio";
+  const language = (options?.language || "").trim();
+  const languageLine = language
+    ? `\nRespond in ${language}. Prefer the customer's dialect (including Egyptian Arabic when they used it).`
+    : "";
+  return [
+    {
+      role: "system" as const,
+      content: `You are ${name}, a customer support assistant answering a general knowledge question.
+
+This is NOT verified Solvio company knowledge. You may answer general topics (for example what a VPN is, HTTP vs HTTPS).
+Never invent Solvio-specific policies, pricing, internal procedures, account data, order data, ticket status, refund decisions, or private company facts.
+If the customer is asking about Solvio the company, say you do not have verified information and offer human support.
+Keep answers concise.${languageLine}`,
     },
     ...history.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
     { role: "user" as const, content: question },
