@@ -7,16 +7,18 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { newBrowserId } from "@/lib/browser-id";
-import { getSocket } from "@/lib/socket";
-import { handoffStatusCopy, customerHandoffStatusLabel } from "@/lib/ai/handoff-copy";
+import { getSocket, joinConversationRoom } from "@/lib/socket";
 import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai/human-support-hours";
 import { chatMessageLabel, shouldAppendChatMessage } from "@/lib/chat-message-label";
 import { formatDate } from "@/lib/utils";
 import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
+import { HumanSupportHeader } from "@/components/chat/human-support-header";
+import { apiErrorMessage, readApiJson } from "@/lib/api-client";
 
 type Handoff = {
   status?: string | null;
   currentAttempt?: number | null;
+  currentAgentId?: string | null;
   attempts?: { order?: number; status?: string }[];
 };
 type Msg = { _id: string; body: string; senderId: string; createdAt: string; role?: string; conversationId?: string };
@@ -44,11 +46,13 @@ export function AiAssistant() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(true);
   const [hoursHint, setHoursHint] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [sendingHuman, setSendingHuman] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     void fetch("/api/ai/handoff-agents")
-      .then((r) => r.json())
+      .then((r) => readApiJson(r))
       .then((json) => {
         if (!json.success) return;
         const parsed = parseHandoffAgentsPayload(json.data);
@@ -60,20 +64,25 @@ export function AiAssistant() {
   }, []);
 
   async function loadLive(id: string) {
-    const res = await fetch("/api/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listMessages: true, conversationId: id }),
-    });
-    const json = await res.json();
-    if (json.success) setLiveMessages(json.data);
-    const convs = await fetch("/api/conversations").then((r) => r.json());
-    if (convs.success) {
-      const conv = convs.data.find((c: { _id: string }) => c._id === id);
-      if (conv) {
-        setHandoff(conv.humanHandoff || null);
-        setCustomerId(conv.customerId || conv.customer?.id || null);
+    try {
+      const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listMessages: true, conversationId: id }),
+      });
+      const json = await readApiJson<Msg[]>(res);
+      if (json.success) setLiveMessages(json.data);
+      const convsRes = await fetch("/api/conversations");
+      const convs = await readApiJson<{ _id: string; humanHandoff?: Handoff; customerId?: string; customer?: { id?: string } }[]>(convsRes);
+      if (convs.success) {
+        const conv = convs.data.find((c) => c._id === id);
+        if (conv) {
+          setHandoff(conv.humanHandoff || null);
+          setCustomerId(conv.customerId || conv.customer?.id || null);
+        }
       }
+    } catch {
+      toast.error("Could not load this conversation.");
     }
   }
 
@@ -83,33 +92,37 @@ export function AiAssistant() {
       return;
     }
     setConnecting(true);
-    const res = await fetch("/api/ai/escalate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, selectedAgentId }),
-    });
-    const json = await res.json();
-    if (!json.success) {
-      toast.error(json.error?.message || "Could not start human support");
+    try {
+      const res = await fetch("/api/ai/escalate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, selectedAgentId }),
+      });
+      const json = await readApiJson<{ _id?: string; id?: string; customerId?: string; humanHandoff?: Handoff }>(res);
+      if (!json.success) {
+        toast.error(apiErrorMessage(json, "Could not start human support"));
+        return;
+      }
+      const id = json.data._id || json.data.id;
+      setConversationId(id || null);
+      setUserId(json.data.customerId || null);
+      setCustomerId(json.data.customerId || null);
+      setHandoff(json.data.humanHandoff || null);
+      setPicking(false);
+      setHuman(true);
+      if (id) await loadLive(id);
+    } catch {
+      toast.error("Could not start human support");
+    } finally {
       setConnecting(false);
-      return;
     }
-    const id = json.data._id || json.data.id;
-    setConversationId(id);
-    setUserId(json.data.customerId);
-    setCustomerId(json.data.customerId);
-    setHandoff(json.data.humanHandoff || null);
-    setPicking(false);
-    setHuman(true);
-    await loadLive(id);
-    setConnecting(false);
   }
 
   useEffect(() => {
     if (!conversationId) return;
     void loadLive(conversationId);
     const s = getSocket();
-    s?.emit("join", { conversationId });
+    const unjoin = joinConversationRoom(s, conversationId);
     const onMsg = (msg: Msg) => {
       const id = msg._id;
       if (!id) return;
@@ -129,63 +142,97 @@ export function AiAssistant() {
       s?.off("handoff:declined", onHandoff);
       s?.off("handoff:accepted", onHandoff);
       s?.off("handoff:unavailable", onHandoff);
-      s?.emit("leave", { conversationId });
+      unjoin();
     };
   }, [conversationId]);
 
   async function sendAi(form: HTMLFormElement) {
     const input = form.elements.namedItem("q") as HTMLInputElement;
     const message = input.value;
-    if (!message) return;
+    if (!message || asking) return;
     input.value = "";
     setMessages((m) => [...m, { role: "user", text: message }]);
-    const res = await fetch("/api/ai/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, sessionId }),
-    });
-    const json = await res.json();
-    if (!json.success) {
-      toast.error(json.error?.message);
-      return;
-    }
-    setMessages((m) => [...m, { role: "assistant", text: json.data.response, sources: json.data.sources }]);
-    if (json.data.handedOff || json.data.aiPaused) {
-      const id = json.data.conversationId;
-      if (id) {
-        setHuman(true);
-        setConversationId(id);
-        await loadLive(id);
+    setAsking(true);
+    try {
+      const res = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, sessionId }),
+      });
+      const json = await readApiJson<{
+        response: string;
+        sources?: { title: string; type?: string; url?: string }[];
+        handedOff?: boolean;
+        aiPaused?: boolean;
+        conversationId?: string;
+      }>(res);
+      if (!json.success) {
+        toast.error(apiErrorMessage(json, "Could not send that message"));
+        return;
       }
+      setMessages((m) => [...m, { role: "assistant", text: json.data.response, sources: json.data.sources }]);
+      if (json.data.handedOff || json.data.aiPaused) {
+        const id = json.data.conversationId;
+        if (id) {
+          setHuman(true);
+          setConversationId(id);
+          await loadLive(id);
+        }
+      }
+    } catch {
+      toast.error("Could not reach the assistant.");
+    } finally {
+      setAsking(false);
     }
   }
 
   async function sendHuman() {
     const body = inputRef.current?.value || "";
-    if (!conversationId || !body.trim()) return;
-    await fetch("/api/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ send: true, conversationId, body }),
-    });
-    if (inputRef.current) inputRef.current.value = "";
+    if (!conversationId || !body.trim() || sendingHuman) return;
+    setSendingHuman(true);
+    try {
+      const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ send: true, conversationId, body }),
+      });
+      const json = await readApiJson<Msg>(res);
+      if (!json.success) {
+        toast.error(apiErrorMessage(json, "Could not send that message"));
+        return;
+      }
+      const msg = json.data;
+      const id = msg._id;
+      if (id) {
+        setLiveMessages((m) => (shouldAppendChatMessage(m, msg, conversationId) ? [...m, { ...msg, _id: id }] : m));
+      }
+      if (inputRef.current) inputRef.current.value = "";
+    } catch {
+      toast.error("Could not send that message");
+    } finally {
+      setSendingHuman(false);
+    }
   }
 
-  const banner = connecting && !handoff ? "Connecting..." : handoffStatusCopy(handoff);
   const viewerId = userId || customerId || "";
-  const waiting = human && handoff?.status !== "ACCEPTED";
+  const selectedCard = agents.find((a) => a.id === selectedAgentId);
+  const closedHuman =
+    handoff?.status === "COMPLETED" || handoff?.status === "NO_AGENT_AVAILABLE";
+  const canTypeToHuman = human && (handoff?.status === "OFFERED" || handoff?.status === "ACCEPTED" || !handoff);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <h1 className="text-2xl font-semibold">AI support assistant</h1>
       {human ? (
         <Card className="flex min-h-[50vh] flex-col space-y-3">
-          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm" data-handoff-status>
-            {banner}
-            {handoff ? (
-              <span className="mt-1 block text-xs">Status: {customerHandoffStatusLabel(handoff.status)}</span>
-            ) : null}
-          </p>
+          <HumanSupportHeader
+            agentLabel={selectedCard?.label || agents.find((a) => a.id === handoff?.currentAgentId)?.label}
+            agentName={selectedCard?.name || agents.find((a) => a.id === handoff?.currentAgentId)?.name}
+            avatarUrl={selectedCard?.avatarUrl || agents.find((a) => a.id === handoff?.currentAgentId)?.avatarUrl}
+            status={handoff?.status}
+            currentAttempt={handoff?.currentAttempt}
+            attempts={handoff?.attempts}
+          />
           {handoff?.status === "NO_AGENT_AVAILABLE" ? (
             <Button asChild size="sm" variant="outline">
               <Link href="/support/new">Create Ticket</Link>
@@ -212,13 +259,15 @@ export function AiAssistant() {
               </div>
             ))}
           </div>
-          {handoff?.status === "ACCEPTED" ? (
-          <div className="flex gap-2">
-            <Input ref={inputRef} aria-label="Message the agent" placeholder="Message your agent" onKeyDown={(e) => { if (e.key === "Enter") void sendHuman(); }} />
-            <Button type="button" onClick={() => void sendHuman()}>Send</Button>
+          {canTypeToHuman ? (
+          <div className="mt-auto flex shrink-0 gap-2 pt-3">
+            <Input ref={inputRef} aria-label="Type your message" placeholder="Type your message..." onKeyDown={(e) => { if (e.key === "Enter") void sendHuman(); }} />
+            <Button type="button" disabled={sendingHuman} onClick={() => void sendHuman()}>{sendingHuman ? "Sending…" : "Send"}</Button>
           </div>
-          ) : waiting ? (
-            <p className="text-sm text-muted-foreground">Waiting for an agent to accept your request.</p>
+          ) : closedHuman ? (
+            <p className="text-sm text-muted-foreground">Conversation closed</p>
+          ) : connecting ? (
+            <p className="text-sm text-muted-foreground">Connecting...</p>
           ) : null}
         </Card>
       ) : (
@@ -247,7 +296,7 @@ export function AiAssistant() {
           {!picking ? (
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); void sendAi(e.currentTarget); }}>
             <Input name="q" aria-label="Ask Solvio" placeholder="Ask a question" />
-            <Button type="submit">Send</Button>
+            <Button type="submit" disabled={asking}>{asking ? "Sending…" : "Send"}</Button>
           </form>
           ) : null}
         </>
@@ -255,9 +304,10 @@ export function AiAssistant() {
       {!supportOpen ? (
         <p className="whitespace-pre-line text-sm text-muted-foreground">{hoursHint || HUMAN_SUPPORT_HOURS_MESSAGE}</p>
       ) : null}
+      {!human ? (
       <Button
         variant="outline"
-        disabled={!supportOpen}
+        disabled={!supportOpen || connecting}
         onClick={() => {
           if (!supportOpen) {
             toast.error(hoursHint || HUMAN_SUPPORT_HOURS_MESSAGE);
@@ -268,6 +318,7 @@ export function AiAssistant() {
       >
         Talk to Human
       </Button>
+      ) : null}
     </div>
   );
 }

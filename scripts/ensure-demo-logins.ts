@@ -6,17 +6,16 @@ import { connectDb, prisma } from "../lib/db";
 import { auth } from "../lib/auth";
 import { DEMO_ACCOUNTS } from "../lib/demo-accounts";
 import { DEFAULT_ORGANIZATION_ID } from "../types";
+import { ensureHandoffAgents } from "./ensure-handoff-agents";
 import type { Role } from "@prisma/client";
 
 const ROLES: Record<(typeof DEMO_ACCOUNTS)[number]["email"], Role> = {
   "admin@solvio.local": "ADMIN",
-  "agent@solvio.local": "AGENT",
   "customer@solvio.local": "CUSTOMER",
 };
 
 const NAMES: Record<(typeof DEMO_ACCOUNTS)[number]["email"], string> = {
   "admin@solvio.local": "Noah Adler",
-  "agent@solvio.local": "Maya Chen",
   "customer@solvio.local": "Ava Patel",
 };
 
@@ -48,6 +47,7 @@ async function main() {
       },
     });
   }
+  await ensureHandoffAgents();
   const users = await prisma.user.findMany({
     where: { email: { in: DEMO_ACCOUNTS.map((a) => a.email) } },
     select: { id: true, email: true, role: true },

@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { newBrowserId } from "@/lib/browser-id";
 import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
+import { HumanSupportHeader } from "@/components/chat/human-support-header";
 import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai/human-support-hours";
+import { apiErrorMessage, readApiJson } from "@/lib/api-client";
 
 type WidgetConfig = {
   title: string;
@@ -62,7 +64,8 @@ export function EmbedWidget() {
   const [busy, setBusy] = useState(false);
   const [human, setHuman] = useState(false);
   const [widgetToken, setWidgetToken] = useState("");
-  const [status, setStatus] = useState("");
+  const [handoffStatus, setHandoffStatus] = useState<string | null>(null);
+  const [handoffAttempt, setHandoffAttempt] = useState(1);
   const [picking, setPicking] = useState(false);
   const [agents, setAgents] = useState<AgentCard[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -80,7 +83,7 @@ export function EmbedWidget() {
     fetch(`/api/widget/config?key=${encodeURIComponent(key)}&parent=${encodeURIComponent(resolvedParent)}`, {
       headers: widgetHeaders(key, resolvedParent),
     })
-      .then((res) => res.json())
+      .then((res) => readApiJson(res))
       .then((json) => {
         if (!json.success) {
           setError(json.error?.message || "Widget is not available on this site");
@@ -97,7 +100,7 @@ export function EmbedWidget() {
       headers: widgetHeaders(key, resolvedParent),
       body: JSON.stringify({ listAgents: true, sessionId }),
     })
-      .then((r) => r.json())
+      .then((r) => readApiJson(r))
       .then((json) => {
         if (!json.success) return;
         const parsed = parseHandoffAgentsPayload(json.data);
@@ -124,13 +127,13 @@ export function EmbedWidget() {
             : { message: text, sessionId },
         ),
       });
-      const json = await res.json();
+      const json = await readApiJson<{ response?: string; offerHuman?: boolean }>(res);
       if (!json.success) {
-        setError(json.error?.message || "Error");
+        setError(apiErrorMessage(json, "Error"));
         return;
       }
       if (human) return;
-      setMessages((m) => [...m, { role: "assistant", text: json.data.response }]);
+      setMessages((m) => [...m, { role: "assistant", text: String(json.data.response || "") }]);
       setOffer(Boolean(json.data.offerHuman));
     } catch {
       setError("Could not send that message");
@@ -170,7 +173,15 @@ export function EmbedWidget() {
             ))
           : <p className="text-sm text-muted-foreground">Loading…</p>}
         {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        {human && status ? <p className="text-xs text-muted-foreground">{status}</p> : null}
+        {human ? (
+          <HumanSupportHeader
+            agentLabel={agents.find((a) => a.id === selectedAgentId)?.label}
+            agentName={agents.find((a) => a.id === selectedAgentId)?.name}
+            avatarUrl={agents.find((a) => a.id === selectedAgentId)?.avatarUrl}
+            status={handoffStatus}
+            currentAttempt={handoffAttempt}
+          />
+        ) : null}
       </div>
       <Button
         className="mt-2"
@@ -199,22 +210,28 @@ export function EmbedWidget() {
           onSend={async () => {
             if (!selectedAgentId) return;
             setBusy(true);
-            const res = await fetch("/api/widget/chat", {
-              method: "POST",
-              headers: widgetHeaders(key, parent),
-              body: JSON.stringify({ escalate: true, sessionId, selectedAgentId }),
-            });
-            const json = await res.json();
-            setBusy(false);
-            if (!json.success) {
-              setError(json.error?.message || "Could not start human support");
-              return;
+            try {
+              const res = await fetch("/api/widget/chat", {
+                method: "POST",
+                headers: widgetHeaders(key, parent),
+                body: JSON.stringify({ escalate: true, sessionId, selectedAgentId }),
+              });
+              const json = await readApiJson<{ widgetToken?: string; handoff?: { currentAttempt?: number; status?: string } }>(res);
+              if (!json.success) {
+                setError(apiErrorMessage(json, "Could not start human support"));
+                return;
+              }
+              setHuman(true);
+              setPicking(false);
+              setWidgetToken(json.data.widgetToken || "");
+              setHandoffStatus(json.data.handoff?.status || "OFFERED");
+              setHandoffAttempt(json.data.handoff?.currentAttempt || 1);
+              setOffer(false);
+            } catch {
+              setError("Could not start human support");
+            } finally {
+              setBusy(false);
             }
-            setHuman(true);
-            setPicking(false);
-            setWidgetToken(json.data.widgetToken || "");
-            setStatus(`Request sent to Agent ${json.data.handoff?.currentAttempt || 1}. Waiting for Agent ${json.data.handoff?.currentAttempt || 1}...`);
-            setOffer(false);
           }}
         />
       ) : null}

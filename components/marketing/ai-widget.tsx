@@ -8,10 +8,11 @@ import { Input } from "@/components/ui/input";
 import { OPEN_ASSISTANT_EVENT, OPEN_HUMAN_HANDOFF_EVENT } from "@/components/marketing/open-assistant";
 import { newBrowserId } from "@/lib/browser-id";
 import { getWidgetSocket } from "@/lib/socket";
-import { customerHandoffStatusLabel, handoffStatusCopy } from "@/lib/ai/handoff-copy";
 import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai/human-support-hours";
 import { shouldAppendChatMessage } from "@/lib/chat-message-label";
+import { HumanSupportHeader } from "@/components/chat/human-support-header";
 import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
+import { apiErrorMessage, readApiJson } from "@/lib/api-client";
 import type { Socket } from "socket.io-client";
 
 const KEY = process.env.NEXT_PUBLIC_WIDGET_KEY || "solvio-widget-dev-key";
@@ -94,7 +95,7 @@ export function AiWidget() {
       headers: widgetHeaders(),
       body: JSON.stringify({ listAgents: true, sessionId: initial.sessionId }),
     })
-      .then((r) => r.json())
+      .then((r) => readApiJson(r))
       .then((json) => {
         if (!json.success) return;
         const parsed = parseHandoffAgentsPayload(json.data);
@@ -133,8 +134,8 @@ export function AiWidget() {
           headers: widgetHeaders(),
           body: JSON.stringify({ send: true, message: trimmed, sessionId, widgetToken, conversationId }),
         });
-        const json = await res.json();
-        if (!json.success) setError(json.error?.message || "Could not send");
+        const json = await readApiJson<{ handoff?: Parameters<typeof setHandoff>[0] }>(res);
+        if (!json.success) setError(apiErrorMessage(json, "Could not send"));
         else if (json.data.handoff) setHandoff(json.data.handoff);
       } catch {
         setError("Could not send that message");
@@ -150,10 +151,16 @@ export function AiWidget() {
         headers: widgetHeaders(),
         body: JSON.stringify({ message: trimmed, sessionId }),
       });
-      const json = await res.json();
+      const json = await readApiJson<{
+        sessionId?: string;
+        response?: string;
+        sources?: { title?: string }[];
+        offerHuman?: boolean;
+        escalated?: boolean;
+      }>(res);
       if (!json.success) {
         const setup =
-          json.error?.message || "The assistant is unavailable right now. You can create a ticket instead.";
+          apiErrorMessage(json, "The assistant is unavailable right now. You can create a ticket instead.");
         setError(setup);
         setMessages((m) => [...m, { role: "assistant", text: setup }]);
         setOfferHuman(true);
@@ -190,9 +197,13 @@ export function AiWidget() {
         headers: widgetHeaders(),
         body: JSON.stringify({ escalate: true, sessionId, selectedAgentId }),
       });
-      const json = await res.json();
+      const json = await readApiJson<{
+        conversationId: string;
+        widgetToken?: string;
+        handoff?: unknown;
+      }>(res);
       if (!json.success) {
-        setError(json.error?.message || "Could not start a human handoff.");
+        setError(apiErrorMessage(json, "Could not start a human handoff."));
         setHuman(false);
         return;
       }
@@ -206,10 +217,10 @@ export function AiWidget() {
         headers: widgetHeaders(),
         body: JSON.stringify({ listMessages: true, sessionId, widgetToken: json.data.widgetToken }),
       });
-      const listedJson = await listed.json();
+      const listedJson = await readApiJson<{ messages?: unknown[]; handoff?: unknown }>(listed);
       if (listedJson.success) {
-        setLiveMessages(listedJson.data.messages || []);
-        setHandoff(listedJson.data.handoff || json.data.handoff);
+        setLiveMessages((listedJson.data.messages || []) as typeof liveMessages);
+        setHandoff((listedJson.data.handoff || json.data.handoff) as typeof handoff);
       }
     } catch {
       setError("Could not start a human handoff.");
@@ -313,12 +324,13 @@ export function AiWidget() {
           <div ref={listRef} className="max-h-80 min-h-48 space-y-2 overflow-y-auto px-3 py-3">
             {human ? (
               <>
-                <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs" data-handoff-status>
-                  {handoffStatusCopy(handoff)}
-                  {handoff?.status ? (
-                    <span className="mt-1 block">Status: {customerHandoffStatusLabel(handoff.status)}</span>
-                  ) : null}
-                </p>
+                <HumanSupportHeader
+                  agentLabel={agents.find((a) => a.id === selectedAgentId)?.label}
+                  agentName={agents.find((a) => a.id === selectedAgentId)?.name}
+                  avatarUrl={agents.find((a) => a.id === selectedAgentId)?.avatarUrl}
+                  status={handoff?.status}
+                  currentAttempt={handoff?.currentAttempt}
+                />
                 {liveMessages.map((m) => (
                   <div
                     key={m._id}
@@ -398,8 +410,11 @@ export function AiWidget() {
                   <Link href="/support/new">Create a ticket</Link>
                 </Button>
               ) : null}
+              {handoff?.status === "COMPLETED" || handoff?.status === "NO_AGENT_AVAILABLE" ? (
+                <p className="text-xs text-muted-foreground">Conversation closed</p>
+              ) : null}
             </div>
-            {!picking && (!human || handoff?.status === "ACCEPTED") ? (
+            {!picking && (!human || handoff?.status === "ACCEPTED" || handoff?.status === "OFFERED") ? (
             <form
               className="flex gap-2"
               onSubmit={(e) => {

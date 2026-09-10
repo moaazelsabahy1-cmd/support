@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { getSocket } from "@/lib/socket";
+import { getSocket, joinConversationRoom } from "@/lib/socket";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { formatDate } from "@/lib/utils";
 import { chatMessageLabel, shouldAppendChatMessage } from "@/lib/chat-message-label";
-import { handoffStatusCopy, customerHandoffStatusLabel } from "@/lib/ai/handoff-copy";
 import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai/human-support-hours";
 import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
+import { HumanSupportHeader } from "@/components/chat/human-support-header";
+import { HumanRequestCard } from "@/components/chat/human-request-card";
+import { readApiJson } from "@/lib/api-client";
 import type { Role } from "@/types";
 
 type Handoff = {
@@ -18,6 +20,7 @@ type Handoff = {
   status?: string;
   currentAttempt?: number;
   currentAgentId?: string | null;
+  currentAgent?: { id?: string; name?: string } | null;
   attempts?: { order?: number; status?: string }[];
 };
 type Conv = {
@@ -60,29 +63,37 @@ export function ChatApp({
   const joinedRef = useRef<string | null>(null);
 
   async function loadConvs() {
-    const res = await fetch("/api/conversations");
-    const json = await res.json();
-    if (json.success) {
-      setConvs(json.data);
-      if (initialConversationId) setActive(initialConversationId);
-      else if (!active && json.data[0]) setActive(json.data[0]._id);
+    try {
+      const res = await fetch("/api/conversations");
+      const json = await readApiJson<Conv[]>(res);
+      if (json.success) {
+        setConvs(json.data);
+        if (initialConversationId) setActive(initialConversationId);
+        else if (!active && json.data[0]) setActive(json.data[0]._id);
+      }
+    } catch {
+      /* ignore */
     }
   }
 
   async function loadMessages(id: string) {
-    const res = await fetch("/api/conversations", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listMessages: true, conversationId: id }),
-    });
-    const json = await res.json();
-    if (json.success) setMessages(json.data);
+    try {
+      const res = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ listMessages: true, conversationId: id }),
+      });
+      const json = await readApiJson<Msg[]>(res);
+      if (json.success) setMessages(json.data);
+    } catch {
+      /* ignore */
+    }
   }
 
   useEffect(() => {
     loadConvs();
     void fetch("/api/ai/handoff-agents")
-      .then((r) => r.json())
+      .then((r) => readApiJson(r))
       .then((json) => {
         if (!json.success) return;
         const parsed = parseHandoffAgentsPayload(json.data);
@@ -102,7 +113,7 @@ export function ChatApp({
       s?.emit("leave", { conversationId: previous });
     }
     joinedRef.current = active;
-    s?.emit("join", { conversationId: active });
+    const unjoin = joinConversationRoom(s, active);
     const onMsg = (msg: Msg) => {
       const id = msg._id;
       if (!id) return;
@@ -111,6 +122,7 @@ export function ChatApp({
     s?.on("message:new", onMsg);
     const onHandoff = () => {
       void loadConvs();
+      void loadMessages(active);
     };
     s?.on("handoff:offered", onHandoff);
     s?.on("handoff:accepted", onHandoff);
@@ -128,7 +140,7 @@ export function ChatApp({
       s?.off("handoff:accepted", onHandoff);
       s?.off("handoff:declined", onHandoff);
       s?.off("handoff:unavailable", onHandoff);
-      s?.emit("leave", { conversationId: active });
+      unjoin();
       if (joinedRef.current === active) joinedRef.current = null;
     };
   }, [active]);
@@ -164,23 +176,32 @@ export function ChatApp({
   async function send() {
     const body = inputRef.current?.value || "";
     if (!active || !body.trim()) return;
-    await fetch("/api/conversations", {
+    const res = await fetch("/api/conversations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ send: true, conversationId: active, body }),
     });
-    if (inputRef.current) inputRef.current.value = "";
+    const json = await readApiJson<Msg>(res);
+    if (json.success) {
+      const msg = json.data;
+      const id = msg._id;
+      if (id) {
+        setMessages((m) => (shouldAppendChatMessage(m, msg, active) ? [...m, { ...msg, _id: id }] : m));
+      }
+      if (inputRef.current) inputRef.current.value = "";
+    }
     getSocket()?.emit("typing:stop", { conversationId: active });
   }
 
   const incoming = convs.filter(
     (c) => c.humanHandoff?.status === "OFFERED" && c.humanHandoff.currentAgentId === userId,
   );
-  const waitingForAccept =
-    activeConv?.customerId === userId &&
-    activeConv.aiPaused &&
-    activeConv.humanHandoff?.status === "OFFERED";
-  const hideComposer = picking || waitingForAccept;
+  const closedThread =
+    activeConv?.status === "CLOSED" ||
+    activeConv?.humanHandoff?.status === "COMPLETED" ||
+    activeConv?.humanHandoff?.status === "NO_AGENT_AVAILABLE";
+  const hideComposer =
+    picking || closedThread || (isAgent && activeConv?.humanHandoff?.status === "OFFERED");
 
   async function actHandoff(handoffId: string, accept: boolean) {
     const res = await fetch("/api/conversations", {
@@ -192,7 +213,10 @@ export function ChatApp({
     if (!json.success) return;
     if (accept) {
       const convId = incoming.find((c) => (c.humanHandoff?.id || c.humanHandoff?._id) === handoffId)?._id;
-      if (convId) setActive(convId);
+      if (convId) {
+        setActive(convId);
+        void loadMessages(convId);
+      }
     }
     void loadConvs();
   }
@@ -221,23 +245,17 @@ export function ChatApp({
             })}
           </div>
           <h3 className="mt-4 font-semibold">Incoming Requests</h3>
-          <p className="text-xs text-muted-foreground">New Customer Request</p>
+          <p className="text-xs text-muted-foreground">Human Request</p>
           <ul className="mt-2 space-y-2">
             {incoming.map((c) => {
               const hid = c.humanHandoff?.id || c.humanHandoff?._id || "";
               return (
-                <li key={c._id} className="rounded-lg border p-3 text-sm">
-                  <p>Customer: {c.customer?.name || "Unknown"}</p>
-                  <p className="text-xs text-muted-foreground">Customer wants to talk to a human.</p>
-                  <p className="text-xs text-muted-foreground">Reason: {c.handoffReason || "Customer requested human support"}</p>
-                  {c.lastMessageAt ? (
-                    <p className="text-xs text-muted-foreground">Time: {formatDate(c.lastMessageAt)}</p>
-                  ) : null}
-                  <div className="mt-2 flex gap-2">
-                    <Button size="sm" onClick={() => void actHandoff(hid, true)}>Accept</Button>
-                    <Button size="sm" variant="outline" onClick={() => void actHandoff(hid, false)}>Decline</Button>
-                  </div>
-                </li>
+                <HumanRequestCard
+                  key={c._id}
+                  conv={c}
+                  onAccept={() => void actHandoff(hid, true)}
+                  onDecline={() => void actHandoff(hid, false)}
+                />
               );
             })}
             {!incoming.length ? <li className="text-sm text-muted-foreground">No incoming requests.</li> : null}
@@ -272,17 +290,20 @@ export function ChatApp({
                 <span className="text-muted-foreground"> · {activeConv.customer.email}</span>
               ) : null}
             </p>
-            {activeConv.aiPaused ? (
-              <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
-                {handoffStatusCopy(activeConv.humanHandoff)}
-                <span className="mt-1 block text-xs">
-                  Status: {customerHandoffStatusLabel(activeConv.humanHandoff?.status, activeConv.status === "CLOSED")}
-                </span>
-                {activeConv.handoffReason ? ` · ${activeConv.handoffReason}` : ""}
-                {activeConv.lastQuestion ? (
-                  <span className="mt-1 block text-xs text-muted-foreground">{activeConv.lastQuestion}</span>
-                ) : null}
-              </p>
+            {activeConv.humanHandoff ? (
+              <HumanSupportHeader
+                agentLabel={agents.find((a) => a.id === activeConv.humanHandoff?.currentAgentId)?.label}
+                agentName={
+                  activeConv.humanHandoff?.currentAgent?.name ||
+                  agents.find((a) => a.id === activeConv.humanHandoff?.currentAgentId)?.name
+                }
+                customerName={isAgent ? activeConv.customer?.name : undefined}
+                avatarUrl={agents.find((a) => a.id === activeConv.humanHandoff?.currentAgentId)?.avatarUrl}
+                status={activeConv.humanHandoff?.status}
+                currentAttempt={activeConv.humanHandoff?.currentAttempt}
+                attempts={activeConv.humanHandoff?.attempts}
+                conversationClosed={activeConv.status === "CLOSED"}
+              />
             ) : null}
             {activeConv.humanHandoff?.status === "NO_AGENT_AVAILABLE" && activeConv.customerId === userId ? (
               <Button asChild size="sm" variant="outline">
@@ -299,6 +320,7 @@ export function ChatApp({
                   onSend={async () => {
                     if (!selectedAgentId) return;
                     setSendingRequest(true);
+                    try {
                     const res = await fetch("/api/ai/escalate", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
@@ -307,11 +329,13 @@ export function ChatApp({
                         selectedAgentId,
                       }),
                     });
-                    const json = await res.json();
-                    setSendingRequest(false);
+                    const json = await readApiJson(res);
                     if (!json.success) return;
                     setPicking(false);
                     void loadConvs();
+                    } finally {
+                    setSendingRequest(false);
+                    }
                   }}
                 />
               ) : supportOpen ? (
@@ -334,12 +358,13 @@ export function ChatApp({
           ))}
           {typing ? <p className="text-xs text-muted-foreground">Typing…</p> : null}
         </div>
-        <div className="mt-4 flex gap-2">
+        <div className="mt-auto flex shrink-0 gap-2 pt-3">
           {!hideComposer ? (
           <>
           <Input
             ref={inputRef}
-            aria-label="Message"
+            aria-label="Type your message"
+            placeholder="Type your message..."
             onKeyDown={(e) => {
               if (e.key === "Enter") send();
               if (active) getSocket()?.emit("typing:start", { conversationId: active });
@@ -349,7 +374,7 @@ export function ChatApp({
           </>
           ) : (
             <p className="text-sm text-muted-foreground">
-              {picking ? "Choose an agent, then Send Request." : "Waiting for an agent to accept your request."}
+              {picking ? "Choose an agent, then Send Request." : closedThread ? "Conversation closed" : "Accept the request to reply."}
             </p>
           )}
           {active ? (

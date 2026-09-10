@@ -15,17 +15,35 @@ const protectedPrefixes = [
 ];
 
 export function middleware(req: NextRequest) {
+  const requestId = req.headers.get("x-request-id") || crypto.randomUUID();
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set("x-request-id", requestId);
   const session = getSessionCookie(req);
   const path = req.nextUrl.pathname;
+  let res: NextResponse;
   if (protectedPrefixes.some((p) => path === p || path.startsWith(`${p}/`)) && !session) {
     const url = req.nextUrl.clone();
     url.pathname = "/login";
     url.searchParams.set("next", path);
-    return NextResponse.redirect(url);
+    res = NextResponse.redirect(url);
+  } else {
+    res = NextResponse.next({ request: { headers: requestHeaders } });
   }
-  return NextResponse.next();
+  res.headers.set("x-request-id", requestId);
+  return res;
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/admin/:path*", "/agent/:path*", "/tickets/:path*", "/chat/:path*", "/settings/:path*", "/analytics/:path*", "/meetings/:path*", "/notifications/:path*"],
+  matcher: [
+    "/dashboard/:path*",
+    "/admin/:path*",
+    "/agent/:path*",
+    "/tickets/:path*",
+    "/chat/:path*",
+    "/settings/:path*",
+    "/analytics/:path*",
+    "/meetings/:path*",
+    "/notifications/:path*",
+    "/api/:path*",
+  ],
 };

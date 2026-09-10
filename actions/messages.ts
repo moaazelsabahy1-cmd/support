@@ -43,7 +43,12 @@ export async function listConversationsAction() {
     take: 50,
     include: {
       customer: { select: { id: true, name: true, email: true } },
-      humanHandoff: { include: { attempts: { orderBy: { order: "asc" as const } } } },
+      humanHandoff: {
+        include: {
+          attempts: { orderBy: { order: "asc" as const } },
+          currentAgent: { select: { id: true, name: true } },
+        },
+      },
       messages: {
         where: { role: "CUSTOMER", internal: false },
         orderBy: { createdAt: "desc" },
@@ -126,6 +131,20 @@ export async function closeConversationAction(conversationId: string) {
     where: { conversationId: conv.id, status: { in: ["OFFERED", "ACCEPTED"] } },
     data: { status: "COMPLETED", completedAt: new Date() },
   });
+  if (conv.humanHandoff) {
+    await prisma.humanHandoffEvent.create({
+      data: {
+        id: newId(),
+        handoffId: conv.humanHandoff.id,
+        conversationId: conv.id,
+        actorId: user.id,
+        type: "CLOSED",
+        fromStatus: conv.humanHandoff.status,
+        toStatus: "COMPLETED",
+        agentId: conv.humanHandoff.currentAgentId,
+      },
+    });
+  }
   await extractConversationKnowledge(conv.id);
   return serialize(updated);
 }
@@ -137,18 +156,32 @@ export async function escalateAiToHumanAction(sessionId: string, selectedAgentId
   }
   const organizationId = await knowledgeOrgId(user.id);
   await resolveHandoffStartAgent(organizationId, selectedAgentId);
-  const conv = await findOrCreateCustomerConversation({
+  let conv = await findOrCreateCustomerConversation({
     customerId: user.id,
     organizationId,
     sessionId,
   });
-  if (conv.aiPaused) {
+  const existingHandoff = await prisma.humanHandoff.findUnique({ where: { conversationId: conv.id } });
+  const activeHandoff =
+    existingHandoff && (existingHandoff.status === "OFFERED" || existingHandoff.status === "ACCEPTED");
+  if (conv.aiPaused && activeHandoff) {
     return serialize(
       await prisma.conversation.findUniqueOrThrow({
         where: { id: conv.id },
         include: { humanHandoff: { include: { attempts: { orderBy: { order: "asc" } } } } },
       }),
     );
+  }
+  if (conv.aiPaused && !activeHandoff) {
+    conv = await prisma.conversation.create({
+      data: {
+        id: newId(),
+        customerId: user.id,
+        organizationId,
+        status: "OPEN",
+        sourceSessionId: sessionId,
+      },
+    });
   }
   assertHumanSupportOpen();
   const logs = await prisma.aiChatLog.findMany({

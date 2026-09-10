@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { jsonFail, jsonOk, toErrorResponse } from "@/lib/api-response";
+import { jsonFail, jsonOk, toErrorResponse, requestIdFrom } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { answerQuestion } from "@/lib/ai/agent";
 import {
@@ -124,6 +124,6 @@ export async function POST(req: NextRequest) {
     });
     return withCors(jsonOk({ ...result, sessionId }), origin, true);
   } catch (e) {
-    return withCors(toErrorResponse(e), origin, true);
+    return withCors(toErrorResponse(e, requestIdFrom(req)), origin, true);
   }
 }

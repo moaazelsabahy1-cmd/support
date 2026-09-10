@@ -5,6 +5,26 @@ import { getEnv } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 import { newId } from "@/lib/id";
 
+function originVariants(...urls: string[]) {
+  const out = new Set<string>();
+  for (const url of urls) {
+    if (!url) continue;
+    out.add(url);
+    try {
+      const u = new URL(url);
+      out.add(u.origin);
+      if (u.hostname.startsWith("www.")) {
+        out.add(`${u.protocol}//${u.hostname.slice(4)}`);
+      } else if (u.hostname.includes(".")) {
+        out.add(`${u.protocol}//www.${u.hostname}`);
+      }
+    } catch {
+      /* ignore invalid */
+    }
+  }
+  return [...out];
+}
+
 const env = getEnv();
 
 export const auth = betterAuth({
@@ -69,7 +89,7 @@ export const auth = betterAuth({
       maxAge: 60 * 5,
     },
   },
-  trustedOrigins: [env.NEXT_PUBLIC_APP_URL, env.BETTER_AUTH_URL],
+  trustedOrigins: originVariants(env.NEXT_PUBLIC_APP_URL, env.BETTER_AUTH_URL),
   plugins: [nextCookies()],
 });
 

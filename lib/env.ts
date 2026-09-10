@@ -2,8 +2,10 @@ import { z } from "zod";
 
 const optional = z.string().optional().or(z.literal(""));
 
+export const LOCAL_DATABASE_URL = "postgresql://solvio:solvio@localhost:5433/solvio";
+
 export const envSchema = z.object({
-  DATABASE_URL: z.string().min(1).default("postgresql://solvio:solvio@localhost:5433/solvio"),
+  DATABASE_URL: z.string().min(1).default(LOCAL_DATABASE_URL),
   BETTER_AUTH_SECRET: z.string().min(32).default("dev-secret-change-me-32chars-min"),
   BETTER_AUTH_URL: z.string().default("http://localhost:3000"),
   OPENROUTER_API_KEY: optional,
@@ -55,15 +57,34 @@ export type Env = z.infer<typeof envSchema>;
 
 let cached: Env | null = null;
 
-export function getEnv(): Env {
-  if (cached) return cached;
-  const parsed = envSchema.safeParse(process.env);
+export function resetEnvCache() {
+  cached = null;
+}
+
+export function assertProductionEnv(env: Env, raw: NodeJS.ProcessEnv = process.env) {
+  if (env.NODE_ENV !== "production") return;
+  if (raw.NEXT_PHASE === "phase-production-build") return;
+  if (!raw.DATABASE_URL || env.DATABASE_URL === LOCAL_DATABASE_URL) {
+    throw new Error("DATABASE_URL must be set to production PostgreSQL (not the local default).");
+  }
+  if (env.BETTER_AUTH_SECRET === "dev-secret-change-me-32chars-min") {
+    throw new Error("BETTER_AUTH_SECRET must be set in production.");
+  }
+}
+
+export function parseEnv(source: NodeJS.ProcessEnv = process.env): Env {
+  const parsed = envSchema.safeParse(source);
   if (!parsed.success) {
     console.error("Invalid environment", parsed.error.flatten());
-    cached = envSchema.parse({});
-    return cached;
+    throw new Error("Invalid environment variables");
   }
-  cached = parsed.data;
+  assertProductionEnv(parsed.data, source);
+  return parsed.data;
+}
+
+export function getEnv(): Env {
+  if (cached) return cached;
+  cached = parseEnv(process.env);
   return cached;
 }
 

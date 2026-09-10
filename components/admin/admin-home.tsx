@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 export function AdminHome({ stats }: { stats: { totals: Record<string, number | null> } }) {
   const t = stats.totals;
   const links = [
+    ["/admin/agents", "Conversation History"],
     ["/admin/users", "Users"],
     ["/admin/departments", "Departments"],
     ["/admin/knowledge", "Knowledge Base"],

@@ -22,10 +22,15 @@ export async function sendConversationMessage(opts: {
   if (!conv) throw new AppError("NOT_FOUND", "Conversation not found", 404);
   assertCanAccessConversation(opts.user, conv);
 
+  const handoffStatus = conv.humanHandoff?.status;
+  if (conv.status === "CLOSED" || handoffStatus === "COMPLETED" || handoffStatus === "NO_AGENT_AVAILABLE") {
+    throw new AppError("FORBIDDEN", "This conversation is closed.", 403);
+  }
+
   const role = opts.user.role === "CUSTOMER" ? "CUSTOMER" : "HUMAN";
   if (role === "HUMAN") {
-    const offered = conv.humanHandoff?.status === "OFFERED";
-    const accepted = conv.humanHandoff?.status === "ACCEPTED";
+    const offered = handoffStatus === "OFFERED";
+    const accepted = handoffStatus === "ACCEPTED";
     if (offered || (accepted && conv.agentId && conv.agentId !== opts.user.id)) {
       throw new AppError("FORBIDDEN", "Accept the handoff before messaging this customer.", 403);
     }
@@ -58,7 +63,10 @@ export async function sendConversationMessage(opts: {
   });
   const payload = serialize(message);
   emitToConversation(opts.conversationId, "message:new", payload);
-  const other = opts.user.role === "CUSTOMER" ? conv.agentId : conv.customerId;
+  const other =
+    opts.user.role === "CUSTOMER"
+      ? conv.agentId || conv.humanHandoff?.currentAgentId
+      : conv.customerId;
   if (other) {
     await notifyUser({
       userId: other,

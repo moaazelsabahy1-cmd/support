@@ -1,7 +1,7 @@
 import { readFileSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
-import { customerHandoffStatusLabel, handoffStatusCopy } from "../lib/ai/handoff-copy";
+import { customerHandoffStatusLabel, handoffStatusCopy, humanSupportStatusLine } from "../lib/ai/handoff-copy";
 
 describe("homepage hero CTAs", () => {
   it("does not include Browse Knowledge Base in the landing hero", () => {
@@ -23,7 +23,9 @@ describe("Talk to Human picker UI", () => {
     expect(assistant).toMatch(/setPicking\(true\)/);
     expect(assistant).not.toMatch(/offerHuman \|\| json.data.handoffReason/);
     expect(assistant).not.toMatch(/offerHuman[\s\S]{0,80}setPicking\(true\)/);
-    expect(assistant).toMatch(/disabled=\{!supportOpen\}/);
+    expect(assistant).toMatch(/HumanSupportHeader/);
+    expect(assistant).toMatch(/Type your message/);
+    expect(assistant).toMatch(/disabled=\{!supportOpen \|\| connecting\}/);
     const picker = readFileSync(path.join(process.cwd(), "components/chat/agent-picker.tsx"), "utf8");
     expect(picker).toMatch(/Choose a Support Agent/);
     expect(picker).toMatch(/Send Request/);
@@ -38,27 +40,22 @@ describe("Talk to Human picker UI", () => {
 });
 
 describe("handoffStatusCopy", () => {
-  it("describes Agent 1, decline advance, join, and none available", () => {
+  it("describes the selected agent wait, join, and none available", () => {
     expect(handoffStatusCopy({ currentAttempt: 1, status: "OFFERED" })).toBe(
       "You requested help from Agent 1. Request sent to Agent 1. Waiting for Agent 1...",
     );
     expect(handoffStatusCopy({ currentAttempt: 3, status: "OFFERED", attempts: [{ order: 3, status: "OFFERED" }] })).toBe(
       "You requested help from Agent 3. Request sent to Agent 3. Waiting for Agent 3...",
     );
-    expect(
-      handoffStatusCopy({
-        currentAttempt: 2,
-        status: "OFFERED",
-        attempts: [
-          { order: 1, status: "DECLINED" },
-          { order: 2, status: "OFFERED" },
-        ],
-      }),
-    ).toBe("You requested help from Agent 1. Agent 1 is unavailable. Sending your request to Agent 2...");
     expect(handoffStatusCopy({ currentAttempt: 1, status: "ACCEPTED" })).toBe("Agent 1 has joined the conversation.");
-    expect(handoffStatusCopy({ status: "NO_AGENT_AVAILABLE" })).toBe("No support agent is currently available.");
+    expect(handoffStatusCopy({ status: "NO_AGENT_AVAILABLE", currentAttempt: 4 })).toBe(
+      "All human agents are currently unavailable.",
+    );
     expect(customerHandoffStatusLabel("OFFERED")).toBe("PENDING");
     expect(customerHandoffStatusLabel("ACCEPTED")).toBe("ACTIVE");
     expect(customerHandoffStatusLabel("COMPLETED")).toBe("CLOSED");
+    expect(humanSupportStatusLine("OFFERED")).toBe("Request Pending");
+    expect(humanSupportStatusLine("ACCEPTED")).toBe("Connected");
+    expect(humanSupportStatusLine("COMPLETED", true)).toBe("Conversation closed");
   });
 });

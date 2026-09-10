@@ -7,7 +7,9 @@ import { toast } from "sonner";
 import { signIn, signUp } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
-import { DEMO_ACCOUNTS } from "@/lib/demo-accounts";
+import { DEMO_ACCOUNTS, HANDOFF_AGENT_ACCOUNTS, postLoginPath } from "@/lib/demo-accounts";
+
+type DemoLogin = { label: string; email: string; password: string };
 
 export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" | "reset" }) {
   const router = useRouter();
@@ -15,19 +17,25 @@ export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" | "re
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
+  function goHome(role?: string | null, loginEmail?: string | null) {
+    router.push(postLoginPath(role, loginEmail));
+    router.refresh();
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setPending(true);
     const form = new FormData(e.currentTarget);
     try {
       if (mode === "login") {
+        const loginEmail = String(form.get("email"));
         const res = await signIn.email({
-          email: String(form.get("email")),
+          email: loginEmail,
           password: String(form.get("password")),
         });
         if (res.error) throw new Error(res.error.message);
-        router.push("/dashboard");
-        router.refresh();
+        const role = (res.data?.user as { role?: string } | undefined)?.role;
+        goHome(role, loginEmail);
       } else if (mode === "register") {
         const res = await signUp.email({
           name: String(form.get("name")),
@@ -63,15 +71,15 @@ export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" | "re
     }
   }
 
-  async function signInDemo(account: (typeof DEMO_ACCOUNTS)[number]) {
+  async function signInDemo(account: DemoLogin) {
     setEmail(account.email);
     setPassword(account.password);
     setPending(true);
     try {
       const res = await signIn.email({ email: account.email, password: account.password });
       if (res.error) throw new Error(res.error.message);
-      router.push("/dashboard");
-      router.refresh();
+      const role = (res.data?.user as { role?: string } | undefined)?.role;
+      goHome(role, account.email);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Auth failed");
     } finally {
@@ -147,20 +155,39 @@ export function AuthForm({ mode }: { mode: "login" | "register" | "forgot" | "re
               Sign up
             </Link>
           </p>
-          <div className="mt-6 grid gap-2">
+          <div className="mt-6 space-y-4">
             <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Demo accounts</p>
-            {DEMO_ACCOUNTS.map((account) => (
-              <button
-                key={account.email}
-                type="button"
-                disabled={pending}
-                onClick={() => signInDemo(account)}
-                className="rounded-xl border border-border bg-accent px-4 py-3 text-left text-sm transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
-              >
-                <span className="font-medium text-foreground">{account.label}</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">{account.email}</span>
-              </button>
-            ))}
+            <div className="grid gap-2">
+              {DEMO_ACCOUNTS.map((account) => (
+                <button
+                  key={account.email}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => signInDemo(account)}
+                  className="rounded-xl border border-border bg-accent px-4 py-3 text-left text-sm transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  <span className="font-medium text-foreground">{account.label}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{account.email}</span>
+                </button>
+              ))}
+            </div>
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">Support Agents</p>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {HANDOFF_AGENT_ACCOUNTS.map((account) => (
+                <button
+                  key={account.email}
+                  type="button"
+                  disabled={pending}
+                  onClick={() => signInDemo(account)}
+                  aria-label={`Sign in as ${account.label} (${account.email})`}
+                  className="rounded-xl border border-border bg-accent px-4 py-3 text-left text-sm transition hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                >
+                  <span className="font-medium text-foreground">{account.label}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{account.name}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{account.email}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </>
       ) : (

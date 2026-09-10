@@ -14,6 +14,27 @@ export function nextHandoffAttempt(currentAttempt: number, queueLength: number) 
   return currentAttempt + 1;
 }
 
+/** Circular next agent who has not already declined this handoff. */
+export function nextEligibleHandoffAgent<T extends { id: string }>(
+  agents: T[],
+  currentAgentId: string,
+  declinedAgentIds: Iterable<string>,
+): { agent: T; attempt: number } | null {
+  const declined = new Set(declinedAgentIds);
+  declined.add(currentAgentId);
+  if (!agents.length) return null;
+  const start = agents.findIndex((a) => a.id === currentAgentId);
+  const from = start < 0 ? 0 : start;
+  for (let step = 1; step <= agents.length; step++) {
+    const idx = (from + step) % agents.length;
+    const agent = agents[idx];
+    if (!declined.has(agent.id)) {
+      return { agent, attempt: idx + 1 };
+    }
+  }
+  return null;
+}
+
 export async function listHandoffAgents(organizationId: string) {
   return prisma.user.findMany({
     where: {
@@ -88,6 +109,41 @@ function payload(handoff: {
   };
 }
 
+export type HandoffEventType =
+  | "HUMAN_REQUESTED"
+  | "REQUEST_SENT"
+  | "OFFERED"
+  | "ACCEPTED"
+  | "DECLINED"
+  | "UNAVAILABLE"
+  | "CONNECTED"
+  | "CLOSED";
+
+export async function recordHandoffEvent(opts: {
+  handoffId: string;
+  conversationId: string;
+  actorId?: string | null;
+  type: HandoffEventType;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  agentId?: string | null;
+  reason?: string | null;
+}) {
+  return prisma.humanHandoffEvent.create({
+    data: {
+      id: newId(),
+      handoffId: opts.handoffId,
+      conversationId: opts.conversationId,
+      actorId: opts.actorId || null,
+      type: opts.type,
+      fromStatus: opts.fromStatus || null,
+      toStatus: opts.toStatus || null,
+      agentId: opts.agentId || null,
+      reason: opts.reason || null,
+    },
+  });
+}
+
 async function systemLine(conversationId: string, body: string) {
   const msg = await prisma.message.create({
     data: {
@@ -137,6 +193,13 @@ export async function startSequentialHandoff(opts: {
           },
         });
     emitToConversation(opts.conversationId, "handoff:unavailable", payload(handoff));
+    await recordHandoffEvent({
+      handoffId: handoff.id,
+      conversationId: opts.conversationId,
+      actorId: opts.customerId,
+      type: "UNAVAILABLE",
+      toStatus: "NO_AGENT_AVAILABLE",
+    });
     await systemLine(opts.conversationId, "No agent is available right now.");
     return handoff;
   }
@@ -187,6 +250,31 @@ export async function startSequentialHandoff(opts: {
     href: `/chat/${opts.conversationId}`,
     type: "ai.handoff",
   });
+  await recordHandoffEvent({
+    handoffId: handoff.id,
+    conversationId: opts.conversationId,
+    actorId: opts.customerId,
+    type: "HUMAN_REQUESTED",
+    toStatus: "OFFERED",
+    agentId: first.id,
+    reason: opts.reason,
+  });
+  await recordHandoffEvent({
+    handoffId: handoff.id,
+    conversationId: opts.conversationId,
+    actorId: opts.customerId,
+    type: "REQUEST_SENT",
+    toStatus: "OFFERED",
+    agentId: first.id,
+  });
+  await recordHandoffEvent({
+    handoffId: handoff.id,
+    conversationId: opts.conversationId,
+    actorId: opts.customerId,
+    type: "OFFERED",
+    toStatus: "OFFERED",
+    agentId: first.id,
+  });
   await systemLine(
     opts.conversationId,
     `Request sent to Agent ${attempt}.\nWaiting for Agent ${attempt}...`,
@@ -216,6 +304,24 @@ export async function acceptHandoff(handoffId: string, agentId: string) {
   emitToConversation(handoff.conversationId, "handoff:accepted", body);
   emitToUser(agentId, "handoff:accepted", body);
   emitToUser(handoff.customerId, "handoff:accepted", body);
+  await recordHandoffEvent({
+    handoffId,
+    conversationId: handoff.conversationId,
+    actorId: agentId,
+    type: "ACCEPTED",
+    fromStatus: "OFFERED",
+    toStatus: "ACCEPTED",
+    agentId,
+  });
+  await recordHandoffEvent({
+    handoffId,
+    conversationId: handoff.conversationId,
+    actorId: agentId,
+    type: "CONNECTED",
+    fromStatus: "OFFERED",
+    toStatus: "ACCEPTED",
+    agentId,
+  });
   await systemLine(handoff.conversationId, `Agent ${handoff.currentAttempt} has joined the conversation.`);
   await notifyUser({
     userId: handoff.customerId,
@@ -229,12 +335,12 @@ export async function acceptHandoff(handoffId: string, agentId: string) {
 
 export async function declineHandoff(handoffId: string, agentId: string) {
   const now = new Date();
-  return prisma.$transaction(async (tx) => {
-    const handoff = await tx.humanHandoff.findUnique({ where: { id: handoffId } });
-    if (!handoff || handoff.status !== "OFFERED" || handoff.currentAgentId !== agentId) {
+  const result = await prisma.$transaction(async (tx) => {
+    const current = await tx.humanHandoff.findUnique({ where: { id: handoffId } });
+    if (!current || current.status !== "OFFERED" || current.currentAgentId !== agentId) {
       throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
     }
-    const conv = await tx.conversation.findUniqueOrThrow({ where: { id: handoff.conversationId } });
+    const conv = await tx.conversation.findUniqueOrThrow({ where: { id: current.conversationId } });
     const agents = await tx.user.findMany({
       where: {
         organizationId: conv.organizationId,
@@ -245,57 +351,120 @@ export async function declineHandoff(handoffId: string, agentId: string) {
       },
       orderBy: { createdAt: "asc" },
       take: MAX_HANDOFF_AGENTS,
-      select: { id: true },
+      select: { id: true, name: true },
     });
-    await tx.agentHandoffAttempt.updateMany({
+    const claimed = await tx.agentHandoffAttempt.updateMany({
       where: { handoffId, agentId, status: "OFFERED" },
       data: { status: "DECLINED", respondedAt: now },
     });
-    const next = nextHandoffAttempt(handoff.currentAttempt, agents.length);
-    if (!next) {
-      const done = await tx.humanHandoff.update({
-        where: { id: handoffId },
-        data: { status: "NO_AGENT_AVAILABLE", currentAgentId: null, completedAt: now },
-      });
-      return { handoff: done, nextAgentId: null as string | null, nextAttempt: null as number | null };
+    if (claimed.count !== 1) {
+      throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
     }
-    const nextAgent = agents[next - 1];
-    await tx.agentHandoffAttempt.create({
+    const declinedRows = await tx.agentHandoffAttempt.findMany({
+      where: { handoffId, status: "DECLINED" },
+      select: { agentId: true },
+    });
+    const next = nextEligibleHandoffAgent(
+      agents,
+      agentId,
+      declinedRows.map((r) => r.agentId),
+    );
+    const lastOrder = await tx.agentHandoffAttempt.aggregate({
+      where: { handoffId },
+      _max: { order: true },
+    });
+    const moved = await tx.humanHandoff.updateMany({
+      where: { id: handoffId, status: "OFFERED", currentAgentId: agentId },
+      data: next
+        ? {
+            status: "OFFERED",
+            currentAgentId: next.agent.id,
+            currentAttempt: next.attempt,
+          }
+        : { status: "NO_AGENT_AVAILABLE", currentAgentId: agentId, completedAt: now },
+    });
+    if (moved.count !== 1) {
+      throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
+    }
+    if (next) {
+      await tx.agentHandoffAttempt.create({
+        data: {
+          id: newId(),
+          handoffId,
+          agentId: next.agent.id,
+          order: (lastOrder._max.order || 0) + 1,
+          status: "OFFERED",
+        },
+      });
+    }
+    await tx.humanHandoffEvent.create({
       data: {
         id: newId(),
         handoffId,
-        agentId: nextAgent.id,
-        order: next,
-        status: "OFFERED",
+        conversationId: current.conversationId,
+        actorId: agentId,
+        type: "DECLINED",
+        fromStatus: "OFFERED",
+        toStatus: next ? "OFFERED" : "NO_AGENT_AVAILABLE",
+        agentId,
       },
     });
-    const updated = await tx.humanHandoff.update({
-      where: { id: handoffId },
-      data: { currentAgentId: nextAgent.id, currentAttempt: next, status: "OFFERED" },
+    await tx.humanHandoffEvent.create({
+      data: {
+        id: newId(),
+        handoffId,
+        conversationId: current.conversationId,
+        actorId: agentId,
+        type: next ? "OFFERED" : "UNAVAILABLE",
+        fromStatus: "OFFERED",
+        toStatus: next ? "OFFERED" : "NO_AGENT_AVAILABLE",
+        agentId: next?.agent.id || agentId,
+      },
     });
-    return { handoff: updated, nextAgentId: nextAgent.id, nextAttempt: next };
-  }).then(async ({ handoff, nextAgentId, nextAttempt }) => {
-    const body = payload(handoff);
-    if (!nextAgentId) {
-      emitToConversation(handoff.conversationId, "handoff:unavailable", body);
-      await systemLine(handoff.conversationId, "No agent is available right now.");
-      return handoff;
-    }
-    emitToConversation(handoff.conversationId, "handoff:declined", body);
-    emitToUser(nextAgentId, "handoff:offered", body);
-    await notifyUser({
-      userId: nextAgentId,
-      title: "NEW CUSTOMER REQUEST",
-      body: `Agent ${nextAttempt} · ${handoff.handoffReason}`,
-      href: `/chat/${handoff.conversationId}`,
-      type: "ai.handoff",
-    });
-    await systemLine(
-      handoff.conversationId,
-      `Agent ${handoff.currentAttempt - 1} is unavailable.\nSending your request to Agent ${handoff.currentAttempt}...`,
-    );
-    return handoff;
+    const handoff = await tx.humanHandoff.findUniqueOrThrow({ where: { id: handoffId } });
+    const declinedAttempt = current.currentAttempt;
+    return { handoff, next, declinedAttempt };
   });
+
+  const body = payload(result.handoff);
+  if (!result.next) {
+    emitToConversation(result.handoff.conversationId, "handoff:unavailable", body);
+    emitToUser(agentId, "handoff:unavailable", body);
+    emitToUser(result.handoff.customerId, "handoff:unavailable", body);
+    await systemLine(result.handoff.conversationId, "All human agents are currently unavailable.");
+    await notifyUser({
+      userId: result.handoff.customerId,
+      title: "Human support unavailable",
+      body: "All human agents are currently unavailable.",
+      href: `/chat/${result.handoff.conversationId}`,
+      type: "ai.escalation",
+    });
+    return result.handoff;
+  }
+
+  emitToConversation(result.handoff.conversationId, "handoff:declined", body);
+  emitToUser(agentId, "handoff:declined", body);
+  emitToConversation(result.handoff.conversationId, "handoff:offered", body);
+  emitToUser(result.next.agent.id, "handoff:offered", body);
+  await systemLine(
+    result.handoff.conversationId,
+    `Agent ${result.declinedAttempt} is unavailable. Your request has been sent to Agent ${result.handoff.currentAttempt}.`,
+  );
+  await notifyUser({
+    userId: result.next.agent.id,
+    title: "NEW CUSTOMER REQUEST",
+    body: `Customer wants to talk to a human · Agent ${result.handoff.currentAttempt}`,
+    href: `/chat/${result.handoff.conversationId}`,
+    type: "ai.handoff",
+  });
+  await notifyUser({
+    userId: result.handoff.customerId,
+    title: "Request forwarded",
+    body: `Agent ${result.declinedAttempt} is unavailable. Your request has been sent to Agent ${result.handoff.currentAttempt}.`,
+    href: `/chat/${result.handoff.conversationId}`,
+    type: "ai.escalation",
+  });
+  return result.handoff;
 }
 
 export async function getHandoffForConversation(conversationId: string) {

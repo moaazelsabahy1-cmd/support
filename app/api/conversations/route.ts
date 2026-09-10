@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { jsonOk, toErrorResponse } from "@/lib/api-response";
+import { jsonOk, toErrorResponse, requestIdFrom } from "@/lib/api-response";
 import {
   getOrCreateConversationAction,
   listConversationsAction,
@@ -10,11 +10,11 @@ import {
   declineHandoffAction,
 } from "@/actions/messages";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     return jsonOk(await listConversationsAction());
   } catch (e) {
-    return toErrorResponse(e);
+    return toErrorResponse(e, requestIdFrom(req));
   }
 }
 
@@ -30,6 +30,6 @@ export async function POST(req: NextRequest) {
     }
     return jsonOk(await getOrCreateConversationAction(body.customerId));
   } catch (e) {
-    return toErrorResponse(e);
+    return toErrorResponse(e, requestIdFrom(req));
   }
 }

@@ -37,6 +37,7 @@ const NAV: { href: string; label: string; icon: typeof Ticket; roles: Role[] }[]
   { href: "/meetings", label: "Meetings", icon: Calendar, roles: ["CUSTOMER", "AGENT", "ADMIN", "SUPER_ADMIN"] },
   { href: "/notifications", label: "Notifications", icon: Bell, roles: ["CUSTOMER", "AGENT", "ADMIN", "SUPER_ADMIN"] },
   { href: "/agent", label: "Agent", icon: LifeBuoy, roles: ["AGENT", "ADMIN", "SUPER_ADMIN"] },
+  { href: "/admin/agents", label: "Conversation History", icon: MessageSquare, roles: ["ADMIN", "SUPER_ADMIN"] },
   { href: "/admin", label: "Admin", icon: Shield, roles: ["ADMIN", "SUPER_ADMIN"] },
   { href: "/analytics", label: "Analytics", icon: LayoutDashboard, roles: ["ADMIN", "SUPER_ADMIN"] },
   { href: "/settings", label: "Settings", icon: Settings, roles: ["CUSTOMER", "AGENT", "ADMIN", "SUPER_ADMIN"] },
@@ -55,7 +56,11 @@ export function AppShell({
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [results, setResults] = useState<{ tickets: { _id: string; title: string; number: string }[]; articles: { slug: string; title: string }[] } | null>(null);
+  const [results, setResults] = useState<{
+    tickets: { _id: string; title: string; number: string }[];
+    articles: { slug: string; title: string }[];
+    conversations?: { _id: string; href: string; customer?: { name?: string } }[];
+  } | null>(null);
 
   const items = useMemo(() => NAV.filter((n) => n.roles.includes(user.role)), [user.role]);
 
@@ -144,6 +149,11 @@ export function AppShell({
                 {results.articles.map((a) => (
                   <Link key={a.slug} href={`/knowledge-base/${a.slug}`} className="block rounded-md px-2 py-1 text-sm hover:bg-muted">
                     KB · {a.title}
+                  </Link>
+                ))}
+                {(results.conversations || []).map((c) => (
+                  <Link key={c._id} href={c.href} className="block rounded-md px-2 py-1 text-sm hover:bg-muted">
+                    Chat · {c.customer?.name || c._id}
                   </Link>
                 ))}
               </div>

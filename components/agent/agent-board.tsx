@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { TicketList } from "@/components/tickets/ticket-list";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +9,7 @@ import { updateTicketAction } from "@/actions/tickets";
 import { toast } from "sonner";
 import { useSession } from "@/lib/auth-client";
 import { getSocket } from "@/lib/socket";
+import { HumanRequestCard } from "@/components/chat/human-request-card";
 
 type ChatRow = {
   _id: string;
@@ -22,10 +24,12 @@ type ChatRow = {
     status?: string;
     currentAttempt?: number;
     currentAgentId?: string | null;
+    currentAgent?: { id?: string; name?: string } | null;
   } | null;
 };
 
 export function AgentBoard() {
+  const router = useRouter();
   const { data } = useSession();
   const [unassigned, setUnassigned] = useState<{ _id: string; number: string; title: string }[]>([]);
   const [chats, setChats] = useState<ChatRow[]>([]);
@@ -44,11 +48,13 @@ export function AgentBoard() {
     s?.on("handoff:offered", refresh);
     s?.on("handoff:accepted", refresh);
     s?.on("handoff:declined", refresh);
+    s?.on("handoff:unavailable", refresh);
     s?.on("notification:new", refresh);
     return () => {
       s?.off("handoff:offered", refresh);
       s?.off("handoff:accepted", refresh);
       s?.off("handoff:declined", refresh);
+      s?.off("handoff:unavailable", refresh);
       s?.off("notification:new", refresh);
     };
   }, []);
@@ -73,7 +79,7 @@ export function AgentBoard() {
     toast.success(accept ? "Accepted" : "Declined");
     if (accept) {
       const convId = incoming.find((c) => (c.humanHandoff?.id || c.humanHandoff?._id) === handoffId)?._id;
-      if (convId) window.location.href = `/chat/${convId}`;
+      if (convId) router.push(`/chat/${convId}`);
     }
     void load();
   }
@@ -101,21 +107,13 @@ export function AgentBoard() {
           {incoming.map((c) => {
             const hid = c.humanHandoff?.id || c.humanHandoff?._id || "";
             return (
-              <li key={c._id} className="rounded-lg border p-3 text-sm">
-                <p>
-                  Customer: {c.customer?.name || "Unknown"}
-                </p>
-                <p className="text-xs text-muted-foreground">Customer wants to talk to a human.</p>
-                <p className="text-xs text-muted-foreground">Reason: {c.handoffReason || "CUSTOMER_REQUESTED_HUMAN"}</p>
-                {c.lastQuestion ? <p className="mt-1">{c.lastQuestion}</p> : null}
-                <div className="mt-2 flex gap-2">
-                  <Button size="sm" onClick={() => act(hid, true)}>Accept</Button>
-                  <Button size="sm" variant="outline" onClick={() => act(hid, false)}>Decline</Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <a href={`/chat/${c._id}`}>Open conversation</a>
-                  </Button>
-                </div>
-              </li>
+              <HumanRequestCard
+                key={c._id}
+                conv={c}
+                onAccept={() => void act(hid, true)}
+                onDecline={() => void act(hid, false)}
+                openHref={`/chat/${c._id}`}
+              />
             );
           })}
           {!incoming.length ? <li className="text-sm text-muted-foreground">No handoff offered to you.</li> : null}

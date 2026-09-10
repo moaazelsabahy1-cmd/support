@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import path from "path";
 import { describe, expect, it } from "vitest";
 import {
   dateAtCairo,
@@ -57,5 +59,28 @@ describe("isHumanSupportOpen Africa/Cairo", () => {
       message: "closed",
     });
     expect(parseHandoffAgentsPayload([])).toMatchObject({ open: true, agents: [] });
+  });
+
+  it("does not gate AI chat on human support hours", () => {
+    const chat = readFileSync(path.join(process.cwd(), "app/api/ai/chat/route.ts"), "utf8");
+    expect(chat).not.toMatch(/assertHumanSupportOpen/);
+    const agent = readFileSync(path.join(process.cwd(), "lib/ai/agent.ts"), "utf8");
+    expect(agent).not.toMatch(/assertHumanSupportOpen/);
+    const turn = readFileSync(path.join(process.cwd(), "lib/ai/customer-turn.ts"), "utf8");
+    expect(turn).toMatch(/HUMAN_SUPPORT_CLOSED/);
+    expect(turn).toMatch(/handedOff: false/);
+  });
+
+  it("persist/auto-handoff at 02:00 Cairo does not block an AI reply (handedOff: false)", () => {
+    const at = dateAtCairo(2026, 1, 16, 2, 0);
+    expect(isHumanSupportOpen(at)).toBe(false);
+    let handedOff = true;
+    try {
+      assertHumanSupportOpen(at);
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "HUMAN_SUPPORT_CLOSED") throw error;
+      handedOff = false;
+    }
+    expect(handedOff).toBe(false);
   });
 });

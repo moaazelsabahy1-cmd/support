@@ -41,14 +41,52 @@ export async function globalSearchAction(q: string) {
       take: 8,
     }),
     prisma.conversation.findMany({
-      where: user.role === "CUSTOMER" ? { customerId: user.id } : {},
+      where: {
+        AND: [
+          user.role === "CUSTOMER"
+            ? { customerId: user.id }
+            : user.role === "AGENT"
+              ? {
+                  OR: [
+                    { agentId: user.id },
+                    { humanHandoff: { is: { currentAgentId: user.id, status: { in: ["OFFERED", "ACCEPTED"] } } } },
+                  ],
+                }
+              : {},
+          {
+            OR: [
+              { id: { contains: q, mode: "insensitive" } },
+              { customer: { is: { name: { contains: q, mode: "insensitive" } } } },
+              { customer: { is: { email: { contains: q, mode: "insensitive" } } } },
+              { messages: { some: { body: { contains: q, mode: "insensitive" } } } },
+            ],
+          },
+        ],
+      },
       take: 8,
+      include: {
+        customer: { select: { id: true, name: true, email: true } },
+        agent: { select: { id: true } },
+        humanHandoff: { select: { currentAgentId: true } },
+      },
     }),
   ]);
+  const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
   return serialize({
     tickets: ticketDocs,
     customers: customerDocs,
     articles: articleDocs,
-    conversations: convoDocs,
+    conversations: convoDocs.map((c) => {
+      const historyAgentId = c.agentId || c.humanHandoff?.currentAgentId || null;
+      return {
+        id: c.id,
+        customer: c.customer,
+        assignedAgentId: historyAgentId,
+        href:
+          isAdmin && historyAgentId
+            ? `/admin/agents/${historyAgentId}/conversations/${c.id}`
+            : `/chat/${c.id}`,
+      };
+    }),
   });
 }
