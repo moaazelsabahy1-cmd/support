@@ -67,6 +67,8 @@ export function AiWidget() {
   const [liveMessages, setLiveMessages] = useState<LiveMsg[]>([]);
   const [picking, setPicking] = useState(false);
   const [agents, setAgents] = useState<AgentCard[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(true);
   const [hoursHint, setHoursHint] = useState("");
@@ -97,13 +99,17 @@ export function AiWidget() {
     })
       .then((r) => readApiJson(r))
       .then((json) => {
-        if (!json.success) return;
+        if (!json.success) {
+          setAgentsError(apiErrorMessage(json, "Could not load support agents"));
+          return;
+        }
         const parsed = parseHandoffAgentsPayload(json.data);
         setAgents(parsed.agents);
         setSupportOpen(parsed.open);
         setHoursHint(parsed.message);
       })
-      .catch(() => undefined);
+      .catch(() => setAgentsError("Could not load support agents"))
+      .finally(() => setAgentsLoading(false));
   }, []);
 
   useEffect(() => {
@@ -378,6 +384,8 @@ export function AiWidget() {
                 onSelect={setSelectedAgentId}
                 onSend={() => void escalate()}
                 sending={loading}
+                loading={agentsLoading}
+                error={agentsError || null}
               />
             ) : null}
           </div>

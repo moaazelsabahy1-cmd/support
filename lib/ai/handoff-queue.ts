@@ -2,52 +2,69 @@ import { prisma } from "@/lib/db";
 import { notifyUser } from "@/lib/notifications";
 import { emitToConversation, emitToUser } from "@/lib/socket-server";
 import { serialize } from "@/lib/serialize";
-import { SYSTEM_AI_USER_ID } from "@/types";
+import { DEFAULT_ORGANIZATION_ID, SYSTEM_AI_USER_ID } from "@/types";
 import { newId } from "@/lib/id";
 import { AppError } from "@/lib/api-response";
+import { HANDOFF_AGENT_ACCOUNTS } from "@/lib/demo-accounts";
+import { redactedDatabaseFingerprint } from "@/lib/db-fingerprint";
 import type { AiHandoffReason } from "@/types";
 
 export const MAX_HANDOFF_AGENTS = 4;
+export const HANDOFF_AGENTS_QUERY_MESSAGE = "Could not load support agents. Try again.";
+
+export function handoffAgentsQueryFailed(err: unknown): never {
+  console.error("[handoff-agents] query_failed", err instanceof Error ? err.message : "error");
+  throw new AppError("HANDOFF_AGENTS_QUERY_FAILED", HANDOFF_AGENTS_QUERY_MESSAGE, 503);
+}
 
 export function nextHandoffAttempt(currentAttempt: number, queueLength: number) {
   if (currentAttempt >= queueLength || currentAttempt >= MAX_HANDOFF_AGENTS) return null;
   return currentAttempt + 1;
 }
 
-/** Circular next agent who has not already declined this handoff. */
-export function nextEligibleHandoffAgent<T extends { id: string }>(
-  agents: T[],
-  currentAgentId: string,
-  declinedAgentIds: Iterable<string>,
-): { agent: T; attempt: number } | null {
-  const declined = new Set(declinedAgentIds);
-  declined.add(currentAgentId);
-  if (!agents.length) return null;
-  const start = agents.findIndex((a) => a.id === currentAgentId);
-  const from = start < 0 ? 0 : start;
-  for (let step = 1; step <= agents.length; step++) {
-    const idx = (from + step) % agents.length;
-    const agent = agents[idx];
-    if (!declined.has(agent.id)) {
-      return { agent, attempt: idx + 1 };
-    }
-  }
-  return null;
-}
-
 export async function listHandoffAgents(organizationId: string) {
-  return prisma.user.findMany({
-    where: {
+  const select = { id: true, name: true, email: true, createdAt: true, image: true, avatarUrl: true } as const;
+  try {
+    const pinEmails = HANDOFF_AGENT_ACCOUNTS.map((a) => a.email);
+    const rows =
+      organizationId === DEFAULT_ORGANIZATION_ID
+        ? await prisma.user.findMany({
+            where: {
+              organizationId,
+              role: "AGENT",
+              status: "ACTIVE",
+              email: { in: [...pinEmails] },
+            },
+            select,
+          })
+        : await prisma.user.findMany({
+            where: {
+              organizationId,
+              role: "AGENT",
+              status: "ACTIVE",
+              email: { not: "ai@solvio.local" },
+              id: { not: SYSTEM_AI_USER_ID },
+            },
+            orderBy: { createdAt: "asc" },
+            take: MAX_HANDOFF_AGENTS,
+            select,
+          });
+    const agents =
+      organizationId === DEFAULT_ORGANIZATION_ID
+        ? pinEmails.map((email) => rows.find((r) => r.email === email)).filter((r): r is (typeof rows)[number] => Boolean(r))
+        : rows;
+    console.info("[handoff-agents]", {
+      env: process.env.NODE_ENV,
       organizationId,
-      role: "AGENT",
-      status: "ACTIVE",
-      email: { not: "ai@solvio.local" },
-      id: { not: SYSTEM_AI_USER_ID },
-    },
-    orderBy: { createdAt: "asc" },
-    take: MAX_HANDOFF_AGENTS,
-    select: { id: true, name: true, email: true, createdAt: true, image: true, avatarUrl: true },
-  });
+      count: agents.length,
+      emails: agents.map((a) => a.email),
+      db: redactedDatabaseFingerprint(),
+    });
+    return agents;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    handoffAgentsQueryFailed(err);
+  }
 }
 
 export type PublicHandoffAgent = {
@@ -340,19 +357,6 @@ export async function declineHandoff(handoffId: string, agentId: string) {
     if (!current || current.status !== "OFFERED" || current.currentAgentId !== agentId) {
       throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
     }
-    const conv = await tx.conversation.findUniqueOrThrow({ where: { id: current.conversationId } });
-    const agents = await tx.user.findMany({
-      where: {
-        organizationId: conv.organizationId,
-        role: "AGENT",
-        status: "ACTIVE",
-        email: { not: "ai@solvio.local" },
-        id: { not: SYSTEM_AI_USER_ID },
-      },
-      orderBy: { createdAt: "asc" },
-      take: MAX_HANDOFF_AGENTS,
-      select: { id: true, name: true },
-    });
     const claimed = await tx.agentHandoffAttempt.updateMany({
       where: { handoffId, agentId, status: "OFFERED" },
       data: { status: "DECLINED", respondedAt: now },
@@ -360,42 +364,12 @@ export async function declineHandoff(handoffId: string, agentId: string) {
     if (claimed.count !== 1) {
       throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
     }
-    const declinedRows = await tx.agentHandoffAttempt.findMany({
-      where: { handoffId, status: "DECLINED" },
-      select: { agentId: true },
-    });
-    const next = nextEligibleHandoffAgent(
-      agents,
-      agentId,
-      declinedRows.map((r) => r.agentId),
-    );
-    const lastOrder = await tx.agentHandoffAttempt.aggregate({
-      where: { handoffId },
-      _max: { order: true },
-    });
     const moved = await tx.humanHandoff.updateMany({
       where: { id: handoffId, status: "OFFERED", currentAgentId: agentId },
-      data: next
-        ? {
-            status: "OFFERED",
-            currentAgentId: next.agent.id,
-            currentAttempt: next.attempt,
-          }
-        : { status: "NO_AGENT_AVAILABLE", currentAgentId: agentId, completedAt: now },
+      data: { status: "NO_AGENT_AVAILABLE", currentAgentId: agentId, completedAt: now },
     });
     if (moved.count !== 1) {
       throw new AppError("CONFLICT", "This handoff is no longer offered to you.", 409);
-    }
-    if (next) {
-      await tx.agentHandoffAttempt.create({
-        data: {
-          id: newId(),
-          handoffId,
-          agentId: next.agent.id,
-          order: (lastOrder._max.order || 0) + 1,
-          status: "OFFERED",
-        },
-      });
     }
     await tx.humanHandoffEvent.create({
       data: {
@@ -405,7 +379,7 @@ export async function declineHandoff(handoffId: string, agentId: string) {
         actorId: agentId,
         type: "DECLINED",
         fromStatus: "OFFERED",
-        toStatus: next ? "OFFERED" : "NO_AGENT_AVAILABLE",
+        toStatus: "NO_AGENT_AVAILABLE",
         agentId,
       },
     });
@@ -415,52 +389,25 @@ export async function declineHandoff(handoffId: string, agentId: string) {
         handoffId,
         conversationId: current.conversationId,
         actorId: agentId,
-        type: next ? "OFFERED" : "UNAVAILABLE",
+        type: "UNAVAILABLE",
         fromStatus: "OFFERED",
-        toStatus: next ? "OFFERED" : "NO_AGENT_AVAILABLE",
-        agentId: next?.agent.id || agentId,
+        toStatus: "NO_AGENT_AVAILABLE",
+        agentId,
       },
     });
     const handoff = await tx.humanHandoff.findUniqueOrThrow({ where: { id: handoffId } });
-    const declinedAttempt = current.currentAttempt;
-    return { handoff, next, declinedAttempt };
+    return { handoff };
   });
 
   const body = payload(result.handoff);
-  if (!result.next) {
-    emitToConversation(result.handoff.conversationId, "handoff:unavailable", body);
-    emitToUser(agentId, "handoff:unavailable", body);
-    emitToUser(result.handoff.customerId, "handoff:unavailable", body);
-    await systemLine(result.handoff.conversationId, "All human agents are currently unavailable.");
-    await notifyUser({
-      userId: result.handoff.customerId,
-      title: "Human support unavailable",
-      body: "All human agents are currently unavailable.",
-      href: `/chat/${result.handoff.conversationId}`,
-      type: "ai.escalation",
-    });
-    return result.handoff;
-  }
-
-  emitToConversation(result.handoff.conversationId, "handoff:declined", body);
-  emitToUser(agentId, "handoff:declined", body);
-  emitToConversation(result.handoff.conversationId, "handoff:offered", body);
-  emitToUser(result.next.agent.id, "handoff:offered", body);
-  await systemLine(
-    result.handoff.conversationId,
-    `Agent ${result.declinedAttempt} is unavailable. Your request has been sent to Agent ${result.handoff.currentAttempt}.`,
-  );
-  await notifyUser({
-    userId: result.next.agent.id,
-    title: "NEW CUSTOMER REQUEST",
-    body: `Customer wants to talk to a human · Agent ${result.handoff.currentAttempt}`,
-    href: `/chat/${result.handoff.conversationId}`,
-    type: "ai.handoff",
-  });
+  emitToConversation(result.handoff.conversationId, "handoff:unavailable", body);
+  emitToUser(agentId, "handoff:unavailable", body);
+  emitToUser(result.handoff.customerId, "handoff:unavailable", body);
+  await systemLine(result.handoff.conversationId, "All human agents are currently unavailable.");
   await notifyUser({
     userId: result.handoff.customerId,
-    title: "Request forwarded",
-    body: `Agent ${result.declinedAttempt} is unavailable. Your request has been sent to Agent ${result.handoff.currentAttempt}.`,
+    title: "Human support unavailable",
+    body: "All human agents are currently unavailable.",
     href: `/chat/${result.handoff.conversationId}`,
     type: "ai.escalation",
   });

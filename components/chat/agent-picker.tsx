@@ -18,32 +18,38 @@ export function AgentPicker({
   onSelect,
   onSend,
   sending,
+  loading,
+  error,
 }: {
   agents: AgentCard[];
   selectedAgentId: string | null;
   onSelect: (id: string) => void;
   onSend: () => void;
   sending?: boolean;
+  loading?: boolean;
+  error?: string | null;
 }) {
   return (
     <div className="space-y-3" data-agent-picker>
       <h2 className="text-lg font-semibold">Talk to Human</h2>
       <p className="text-sm text-muted-foreground">Choose a Support Agent</p>
+      {loading ? <p className="text-sm text-muted-foreground">Loading support agents…</p> : null}
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+      {!loading && !error && agents.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No support agents are available right now.</p>
+      ) : null}
       <div className="grid grid-cols-2 gap-2">
-        {(agents.length ? agents : [1, 2, 3, 4].map((n) => ({ id: "", label: `Agent ${n}`, name: `Agent ${n}`, title: "Support Agent", ordinal: n, avatarUrl: null }))).map((agent) => {
-          const id = agent.id || `placeholder-${agent.ordinal}`;
-          const selected = Boolean(agent.id) && selectedAgentId === agent.id;
+        {agents.map((agent) => {
+          const selected = selectedAgentId === agent.id;
           return (
             <button
-              key={id}
+              key={agent.id}
               type="button"
-              disabled={!agent.id}
               data-agent-card={agent.ordinal}
-              onClick={() => agent.id && onSelect(agent.id)}
+              onClick={() => onSelect(agent.id)}
               className={cn(
                 "rounded-xl border px-3 py-3 text-left text-sm transition",
                 selected ? "border-primary bg-primary/10 ring-2 ring-primary" : "border-border bg-card hover:border-primary/50",
-                !agent.id && "opacity-50",
               )}
             >
               <div className="flex items-start gap-2">
@@ -62,7 +68,7 @@ export function AgentPicker({
           );
         })}
       </div>
-      <Button type="button" className="w-full" disabled={!selectedAgentId || sending} onClick={onSend}>
+      <Button className="w-full" type="button" disabled={!selectedAgentId || sending || loading || Boolean(error)} onClick={onSend}>
         Send Request
       </Button>
     </div>

@@ -1,6 +1,7 @@
 /**
  * Non-destructive: create/activate four Human Support agents on the default org.
  * Does not delete conversations or messages. Not prisma migrate reset / db:seed.
+ * Does not overwrite passwords, emails, or non-empty names.
  */
 import { connectDb, prisma } from "../lib/db";
 import { auth } from "../lib/auth";
@@ -16,17 +17,18 @@ export async function ensureHandoffAgents() {
         body: { name: account.name, email: account.email, password: account.password },
       });
     } else if (accounts === 0) {
-      continue;
+      console.log("skip_no_password_attach", account.email);
     }
+    const row = await prisma.user.findUnique({ where: { email: account.email } });
+    if (!row) continue;
     await prisma.user.update({
       where: { email: account.email },
       data: {
-        name: account.name,
+        ...(row.name?.trim() ? {} : { name: account.name }),
         role: "AGENT",
         status: "ACTIVE",
         emailVerified: true,
         organizationId: DEFAULT_ORGANIZATION_ID,
-        createdAt: new Date(Date.UTC(2024, 0, 1, 0, 0, HANDOFF_AGENT_ACCOUNTS.indexOf(account))),
       },
     });
   }

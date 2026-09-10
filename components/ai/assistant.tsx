@@ -43,6 +43,8 @@ export function AiAssistant() {
   const [connecting, setConnecting] = useState(false);
   const [picking, setPicking] = useState(false);
   const [agents, setAgents] = useState<AgentCard[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [supportOpen, setSupportOpen] = useState(true);
   const [hoursHint, setHoursHint] = useState("");
@@ -54,13 +56,17 @@ export function AiAssistant() {
     void fetch("/api/ai/handoff-agents")
       .then((r) => readApiJson(r))
       .then((json) => {
-        if (!json.success) return;
+        if (!json.success) {
+          setAgentsError(apiErrorMessage(json, "Could not load support agents"));
+          return;
+        }
         const parsed = parseHandoffAgentsPayload(json.data);
         setAgents(parsed.agents);
         setSupportOpen(parsed.open);
         setHoursHint(parsed.message);
       })
-      .catch(() => undefined);
+      .catch(() => setAgentsError("Could not load support agents"))
+      .finally(() => setAgentsLoading(false));
   }, []);
 
   async function loadLive(id: string) {
@@ -290,6 +296,8 @@ export function AiAssistant() {
                 onSelect={setSelectedAgentId}
                 onSend={() => void escalate()}
                 sending={connecting}
+                loading={agentsLoading}
+                error={agentsError || null}
               />
             ) : null}
           </Card>

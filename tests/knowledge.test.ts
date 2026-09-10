@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+import path from "path";
 import { describe, expect, it } from "vitest";
 import { chunkDocument, qaKnowledgeChunks, qaIntentAliases } from "../lib/ai/chunking";
 import { extractFileBuffer, extractMarkdown, extractPlainText } from "../lib/ai/extract";
@@ -15,7 +17,7 @@ import { embeddingModelAliases, getChatModel } from "../lib/ai/providers";
 import { knowledgeIsSufficient } from "../lib/ai/agent";
 import { detectLanguage } from "../lib/ai/language";
 import { isSolvioSpecific } from "../lib/ai/question-kind";
-import { nextHandoffAttempt, nextEligibleHandoffAgent, MAX_HANDOFF_AGENTS, publicHandoffAgentCards } from "../lib/ai/handoff-queue";
+import { nextHandoffAttempt, MAX_HANDOFF_AGENTS, publicHandoffAgentCards } from "../lib/ai/handoff-queue";
 import { sanitizeLearnedText } from "../lib/ai/sanitize-knowledge";
 import { DEFAULT_ANSWER_CONFIDENCE_THRESHOLD } from "../lib/env";
 import { clampKnowledgeCategory, normalizeKnowledgeTags, ticketHasLearnableContent, knowledgeReviewSourceLabel, isTrivialSupportText } from "../lib/ai/knowledge-taxonomy";
@@ -285,12 +287,10 @@ describe("handoff queue order", () => {
     expect(nextHandoffAttempt(2, 2)).toBeNull();
   });
 
-  it("wraps to the next unused agent and never re-offers a declined id", () => {
-    const agents = [{ id: "a1" }, { id: "a2" }, { id: "a3" }, { id: "a4" }];
-    expect(nextEligibleHandoffAgent(agents, "a2", ["a2"])?.agent.id).toBe("a3");
-    expect(nextEligibleHandoffAgent(agents, "a4", ["a2", "a3", "a4"])?.agent.id).toBe("a1");
-    expect(nextEligibleHandoffAgent(agents, "a1", ["a1", "a2", "a3", "a4"])).toBeNull();
-    expect(nextEligibleHandoffAgent(agents, "a2", ["a2"])?.agent.id).not.toBe("a2");
+  it("does not wrap after Decline; selected agent decline is terminal", () => {
+    const queue = readFileSync(path.join(process.cwd(), "lib/ai/handoff-queue.ts"), "utf8");
+    expect(queue).not.toMatch(/nextEligibleHandoffAgent/);
+    expect(queue).toMatch(/status: "NO_AGENT_AVAILABLE", currentAgentId: agentId/);
   });
 
   it("labels four public agent cards without emails", () => {

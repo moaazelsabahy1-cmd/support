@@ -55,6 +55,25 @@ npm test
 | Agent | agent@solvio.local | SolvioAgent1! |
 | Customer | customer@solvio.local | SolvioCustomer1! |
 
+Talk to Human lists four agents (`agent@`–`agent4@solvio.local`). Prisma role is `AGENT` (not `support_agent`).
+
+## Production (chatens.com)
+
+Runtime is PostgreSQL via `DATABASE_URL`. Do **not** set `MONGODB_URI` for the app. Do **not** run `npm run db:seed` or `prisma migrate reset` on production.
+
+Required env names: `NODE_ENV`, `HOST`, `PORT`, `DATABASE_URL`, `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, `NEXT_PUBLIC_SOCKET_PATH`, `WIDGET_PUBLIC_KEY`, `NEXT_PUBLIC_WIDGET_KEY`, `WIDGET_ALLOWED_ORIGINS`, plus OpenRouter/Qdrant as used today.
+
+After deploy (cwd `/var/www/solvio`):
+
+```bash
+npx prisma migrate deploy
+npx tsx scripts/ensure-handoff-agents.ts
+npx tsx scripts/diagnose-handoff-agents.ts
+npm run build
+pm2 restart solvio
+```
+
+`ensure-handoff-agents` is idempotent: it creates missing Better Auth users only, never overwrites passwords or emails, and does not rewrite existing names.
 ## Embed widget
 
 ```html

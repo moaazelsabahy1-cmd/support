@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "db:seed": "tsx scripts/seed.ts",
     "db:check": "tsx scripts/db-check.ts",
+    "db:ensure-handoff-agents": "tsx scripts/ensure-handoff-agents.ts",
+    "db:diagnose-handoff-agents": "tsx scripts/diagnose-handoff-agents.ts",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:mongo": "tsx scripts/migrate-mongo-to-postgres.ts",
     "postinstall": "prisma generate",

@@ -16,7 +16,10 @@ describe("four handoff agents", () => {
   it("renders every API agent card instead of a two-agent slice", () => {
     const picker = readFileSync(path.join(process.cwd(), "components/chat/agent-picker.tsx"), "utf8");
     expect(picker).toMatch(/data-agent-card=\{agent\.ordinal\}/);
+    expect(picker).not.toMatch(/slice\(0,\s*1\)/);
     expect(picker).not.toMatch(/slice\(0,\s*2\)/);
+    expect(picker).not.toMatch(/Maya Chen/);
+    expect(picker).not.toMatch(/placeholder-/);
     expect(picker).not.toMatch(/take:\s*2/);
     const chat = readFileSync(path.join(process.cwd(), "components/chat/chat-app.tsx"), "utf8");
     expect(chat).toMatch(/joinConversationRoom/);
@@ -82,8 +85,11 @@ describe("four handoff agents", () => {
     expect(rows).toHaveLength(4);
     expect(rows.every((r) => r.role === "AGENT" && r.status === "ACTIVE")).toBe(true);
     const listed = await listHandoffAgents(DEFAULT_ORGANIZATION_ID);
-    const listedEmails = listed.map((a) => a.email).sort();
-    expect(listedEmails).toEqual([...emails].sort());
-    expect(listed.map((a) => a.id).sort()).toEqual(rows.map((r) => r.id).sort());
+    const listedEmails = listed.map((a) => a.email);
+    expect(listedEmails).toEqual([...emails]);
+    expect(listed).toHaveLength(4);
+    const cards = (await import("../lib/ai/handoff-queue")).publicHandoffAgentCards(listed);
+    expect(cards).toHaveLength(4);
+    expect(listed.map((a) => a.id)).toEqual(emails.map((e) => rows.find((r) => r.email === e)!.id));
   });
 });

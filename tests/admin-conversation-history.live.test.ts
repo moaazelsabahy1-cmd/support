@@ -241,7 +241,7 @@ describe("admin conversation history", () => {
     expect(detailRoute).not.toMatch(/sendConversationMessage/);
   }, 30_000);
 
-  it("records decline then OFFERED to the next agent on the same handoff", async () => {
+  it("records decline as NO_AGENT_AVAILABLE without forwarding", async () => {
     const { declineHandoff } = await import("../lib/ai/handoff-queue");
     const conv = await prisma.conversation.create({
       data: { id: newId(), customerId, organizationId: ORG, status: "OPEN" },
@@ -258,13 +258,13 @@ describe("admin conversation history", () => {
     const row = await prisma.humanHandoff.findUniqueOrThrow({ where: { conversationId: conv.id } });
     await declineHandoff(row.id, agentIds[0]);
     const done = await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } });
-    expect(done.status).toBe("OFFERED");
-    expect(done.currentAgentId).toBe(agentIds[1]);
+    expect(done.status).toBe("NO_AGENT_AVAILABLE");
+    expect(done.currentAgentId).toBe(agentIds[0]);
     expect(await prisma.humanHandoff.count({ where: { conversationId: conv.id } })).toBe(1);
     const listed = await listConversationsForAgent(admin(), agentIds[0], { status: "declined" });
     expect(listed.items.some((c: { _id: string }) => c._id === conv.id)).toBe(true);
     const nextList = await listConversationsForAgent(admin(), agentIds[1]);
-    expect(nextList.items.some((c: { _id: string }) => c._id === conv.id)).toBe(true);
+    expect(nextList.items.some((c: { _id: string }) => c._id === conv.id)).toBe(false);
     const detail = await getConversationForAdmin(admin(), conv.id, agentIds[0]);
     expect(detail.humanHandoff.events.some((e: { type: string }) => e.type === "DECLINED")).toBe(true);
     expect(detail.humanHandoff.events.some((e: { type: string }) => e.type === "OFFERED")).toBe(true);

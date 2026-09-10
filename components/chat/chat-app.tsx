@@ -11,7 +11,7 @@ import { HUMAN_SUPPORT_HOURS_MESSAGE, parseHandoffAgentsPayload } from "@/lib/ai
 import { AgentPicker, type AgentCard } from "@/components/chat/agent-picker";
 import { HumanSupportHeader } from "@/components/chat/human-support-header";
 import { HumanRequestCard } from "@/components/chat/human-request-card";
-import { readApiJson } from "@/lib/api-client";
+import { apiErrorMessage, readApiJson } from "@/lib/api-client";
 import type { Role } from "@/types";
 
 type Handoff = {
@@ -54,6 +54,8 @@ export function ChatApp({
   const [online, setOnline] = useState<Record<string, boolean>>({});
   const [picking, setPicking] = useState(false);
   const [agents, setAgents] = useState<AgentCard[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [sendingRequest, setSendingRequest] = useState(false);
   const [supportOpen, setSupportOpen] = useState(true);
@@ -95,13 +97,17 @@ export function ChatApp({
     void fetch("/api/ai/handoff-agents")
       .then((r) => readApiJson(r))
       .then((json) => {
-        if (!json.success) return;
+        if (!json.success) {
+          setAgentsError(apiErrorMessage(json, "Could not load support agents"));
+          return;
+        }
         const parsed = parseHandoffAgentsPayload(json.data);
         setAgents(parsed.agents);
         setSupportOpen(parsed.open);
         setHoursHint(parsed.message);
       })
-      .catch(() => undefined);
+      .catch(() => setAgentsError("Could not load support agents"))
+      .finally(() => setAgentsLoading(false));
   }, []);
 
   useEffect(() => {
@@ -317,6 +323,8 @@ export function ChatApp({
                   selectedAgentId={selectedAgentId}
                   onSelect={setSelectedAgentId}
                   sending={sendingRequest}
+                  loading={agentsLoading}
+                  error={agentsError || null}
                   onSend={async () => {
                     if (!selectedAgentId) return;
                     setSendingRequest(true);

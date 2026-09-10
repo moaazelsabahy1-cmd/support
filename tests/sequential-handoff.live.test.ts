@@ -1,5 +1,5 @@
 /**
- * Selected-agent receive + Decline wrap (no re-offer). Requires Postgres.
+ * Selected-agent receive. Decline ends the handoff (no wrap). Requires Postgres.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { prisma, ensureAppDefaults } from "../lib/db";
@@ -136,7 +136,7 @@ describe("handoff receive and decline wrap", () => {
     30_000,
   );
 
-  it("forwards Agent 2 decline to Agent 3 on the same HumanHandoff (E, H)", async () => {
+  it("sets NO_AGENT_AVAILABLE on decline and does not offer another agent (E, H)", async () => {
     const conv = await prisma.conversation.create({
       data: { id: newId(), customerId, organizationId: ORG, status: "OPEN" },
     });
@@ -152,19 +152,21 @@ describe("handoff receive and decline wrap", () => {
     const row = await prisma.humanHandoff.findUniqueOrThrow({ where: { conversationId: conv.id } });
     await declineHandoff(row.id, agentIds[1]);
     const next = await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } });
-    expect(next.status).toBe("OFFERED");
-    expect(next.currentAgentId).toBe(agentIds[2]);
+    expect(next.status).toBe("NO_AGENT_AVAILABLE");
+    expect(next.currentAgentId).toBe(agentIds[1]);
     expect(await prisma.humanHandoff.count({ where: { conversationId: conv.id } })).toBe(1);
+    const offered = await prisma.agentHandoffAttempt.findMany({ where: { handoffId: row.id, status: "OFFERED" } });
+    expect(offered).toHaveLength(0);
     const loaded = await prisma.conversation.findUniqueOrThrow({
       where: { id: conv.id },
       include: { humanHandoff: true },
     });
-    expect(canAccessConversation({ id: agentIds[2], role: "AGENT" }, loaded)).toBe(true);
+    expect(canAccessConversation({ id: agentIds[2], role: "AGENT" }, loaded)).toBe(false);
     expect(canAccessConversation({ id: agentIds[1], role: "AGENT" }, loaded)).toBe(false);
     await cleanupConv(conv.id);
   }, 60_000);
 
-  it("wraps Agent 2→3→4→1 and never re-offers Agent 2 (F)", async () => {
+  it("does not wrap Agent 2 decline to 3→4→1 (F)", async () => {
     const conv = await prisma.conversation.create({
       data: { id: newId(), customerId, organizationId: ORG, status: "OPEN" },
     });
@@ -179,25 +181,16 @@ describe("handoff receive and decline wrap", () => {
     });
     const row = await prisma.humanHandoff.findUniqueOrThrow({ where: { conversationId: conv.id } });
     await declineHandoff(row.id, agentIds[1]);
-    expect((await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } })).currentAgentId).toBe(agentIds[2]);
-    await declineHandoff(row.id, agentIds[2]);
-    expect((await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } })).currentAgentId).toBe(agentIds[3]);
-    await declineHandoff(row.id, agentIds[3]);
-    const toOne = await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } });
-    expect(toOne.status).toBe("OFFERED");
-    expect(toOne.currentAgentId).toBe(agentIds[0]);
-    expect(toOne.currentAgentId).not.toBe(agentIds[1]);
-    await declineHandoff(row.id, agentIds[0]);
     const done = await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } });
     expect(done.status).toBe("NO_AGENT_AVAILABLE");
-    expect(done.currentAgentId).toBe(agentIds[0]);
-    expect(await prisma.humanHandoff.count({ where: { conversationId: conv.id } })).toBe(1);
+    expect(done.currentAgentId).toBe(agentIds[1]);
+    expect(done.currentAgentId).not.toBe(agentIds[2]);
+    await expect(declineHandoff(row.id, agentIds[2])).rejects.toMatchObject({ status: 409 });
     await expect(acceptHandoff(row.id, agentIds[1])).rejects.toMatchObject({ status: 409 });
     await cleanupConv(conv.id);
   }, 60_000);
 
-  it("lets Agent 3 accept after Agent 2 decline and send a visible message (G, H)", async () => {
-    const { sendConversationMessage } = await import("../lib/chat/conversation-message");
+  it("does not let another agent accept after the selected agent declines (G, H)", async () => {
     const conv = await prisma.conversation.create({
       data: { id: newId(), customerId, organizationId: ORG, status: "OPEN" },
     });
@@ -212,22 +205,10 @@ describe("handoff receive and decline wrap", () => {
     });
     const row = await prisma.humanHandoff.findUniqueOrThrow({ where: { conversationId: conv.id } });
     await declineHandoff(row.id, agentIds[1]);
-    await acceptHandoff(row.id, agentIds[2]);
+    await expect(acceptHandoff(row.id, agentIds[2])).rejects.toMatchObject({ status: 409 });
     const accepted = await prisma.humanHandoff.findUniqueOrThrow({ where: { id: row.id } });
-    expect(accepted.status).toBe("ACCEPTED");
-    expect(accepted.currentAgentId).toBe(agentIds[2]);
-    const convRow = await prisma.conversation.findUniqueOrThrow({ where: { id: conv.id } });
-    expect(convRow.agentId).toBe(agentIds[2]);
-    const reply = await sendConversationMessage({
-      user: { id: agentIds[2], role: "AGENT" },
-      conversationId: conv.id,
-      body: "Hello from Agent 3 after forward.",
-    });
-    expect(reply.body).toMatch(/Agent 3/);
-    const visible = await prisma.message.findMany({
-      where: { conversationId: conv.id, internal: false, role: "HUMAN" },
-    });
-    expect(visible.some((m) => m.body.includes("after forward"))).toBe(true);
+    expect(accepted.status).toBe("NO_AGENT_AVAILABLE");
+    expect(accepted.currentAgentId).toBe(agentIds[1]);
     expect(await prisma.humanHandoff.count({ where: { conversationId: conv.id } })).toBe(1);
     await cleanupConv(conv.id);
   }, 60_000);
